@@ -1,4 +1,4 @@
-"""Main IMU Visualizer - Refactored version"""
+"""Main IMU Visualizer - Enhanced with AR Glasses Support"""
 
 import pygame
 import numpy as np
@@ -14,7 +14,7 @@ from .components.calibration_button import CalibrationButton
 from .layouts.device_grid import DeviceGridLayout
 
 class IMUVisualizer:
-    """Enhanced IMU visualizer with modular components"""
+    """Enhanced IMU visualizer with AR Glasses support"""
     
     def __init__(self, width=1400, height=800):
         pygame.init()
@@ -22,7 +22,7 @@ class IMUVisualizer:
         self.width = width
         self.height = height
         self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption("IMU Receiver - iOS Device Visualization")
+        pygame.display.set_caption("IMU Receiver - iOS Devices + AR Glasses Visualization")
         
         # Initialize managers
         self.font_manager = FontManager()
@@ -37,13 +37,13 @@ class IMUVisualizer:
         # Initialize components
         self._init_components()
         
-        # Device order
-        self.device_order = ['phone', 'headphone', 'watch']
+        # Device order - now includes AR glasses
+        self.device_order = ['phone', 'headphone', 'watch', 'glasses']
         
         # Waveform settings
         self.waveform_history = 300
         
-        print("Enhanced IMU Visualizer initialized with modular components")
+        print("Enhanced IMU Visualizer initialized with AR Glasses support")
     
     def _init_components(self):
         """Initialize UI components"""
@@ -56,8 +56,8 @@ class IMUVisualizer:
             height=150
         )
         
-        # Device grid layout manager
-        self.device_layout = DeviceGridLayout(box_size=200, margin=20)
+        # Device grid layout manager (updated for AR glasses)
+        self.device_layout = DeviceGridLayout(box_size=180, margin=20)
         
         # Calibration button (bottom of left panel)
         button_width = 180
@@ -194,10 +194,43 @@ class IMUVisualizer:
         # Draw waveform panel
         self.waveform_panel.draw(self.device_data)
         
+        # Draw connection status for AR glasses
+        self._draw_connection_status()
+        
         # Update display
         pygame.display.flip()
+    
+    def _draw_connection_status(self):
+        """Draw connection status information"""
+        # Show active device count and types
+        active_devices = self.get_active_devices()
+        
+        status_text = f"Active Devices: {len(active_devices)}"
+        if active_devices:
+            device_names = []
+            for device in active_devices:
+                if device == 'glasses':
+                    device_names.append("AR Glasses")
+                elif device == 'phone':
+                    device_names.append("Phone")
+                elif device == 'watch':
+                    device_names.append("Watch")
+                elif device == 'headphone':
+                    device_names.append("AirPods")
+                else:
+                    device_names.append(device.title())
+            
+            status_text += f" ({', '.join(device_names)})"
+        
+        status_surface = self.font_manager.render_text(status_text, 'small', Colors.TEXT_SECONDARY)
+        self.screen.blit(status_surface, (20, self.height - 25))
+        
+        # Show listening port
+        port_text = "Listening on UDP port 8001"
+        port_surface = self.font_manager.render_text(port_text, 'tiny', Colors.TEXT_TERTIARY)
+        self.screen.blit(port_surface, (20, self.height - 45))
     
     def cleanup(self):
         """Clean up resources"""
         pygame.quit()
-        print("Enhanced iOS IMU visualizer cleaned up")
+        print("Enhanced IMU visualizer with AR Glasses support cleaned up")

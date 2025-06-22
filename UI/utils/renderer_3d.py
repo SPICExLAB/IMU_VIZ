@@ -1,4 +1,4 @@
-"""3D rendering utilities for device visualization"""
+"""3D rendering utilities for device visualization with AR Glasses support"""
 
 import numpy as np
 import pygame
@@ -6,13 +6,14 @@ import math
 from scipy.spatial.transform import Rotation as R
 
 class Renderer3D:
-    """Handles 3D rendering operations"""
+    """Handles 3D rendering operations including AR Glasses"""
     
     # Device 3D scales (for different shapes)
     DEVICE_SCALES = {
         'phone': (0.4, 1.0, 0.08),      # iPhone: thin rectangle
         'headphone': (0.6, 0.6, 0.6),   # AirPods: smaller cube
-        'watch': (0.8, 0.8, 0.3)        # Watch: square with depth
+        'watch': (0.8, 0.8, 0.3),       # Watch: square with depth
+        'glasses': (2.5, 1.0, 0.5)      # AR Glasses: x:y:z = 5:2:1 ratio, wide horizontal
     }
     
     def __init__(self, screen):
@@ -32,18 +33,36 @@ class Renderer3D:
         """Create device-specific 3D vertices"""
         scale_x, scale_y, scale_z = self.DEVICE_SCALES.get(device_type, (0.5, 0.5, 0.5))
         
-        vertices = np.array([
-            # Bottom face
-            [-scale_x, -scale_y, -scale_z],
-            [scale_x, -scale_y, -scale_z],
-            [scale_x, scale_y, -scale_z],
-            [-scale_x, scale_y, -scale_z],
-            # Top face  
-            [-scale_x, -scale_y, scale_z],
-            [scale_x, -scale_y, scale_z],
-            [scale_x, scale_y, scale_z],
-            [-scale_x, scale_y, scale_z]
-        ]) * size
+        # Special handling for glasses to create a proper glasses shape
+        if device_type == 'glasses':
+            # Create AR glasses shape with correct proportions: x:y:z = 5:2:1
+            # X = width (left-right), Y = height (up-down), Z = depth (forward-back)
+            vertices = np.array([
+                # Bottom face (glasses frame bottom)
+                [-scale_x, -scale_y, -scale_z],    # 0: left-bottom-back
+                [scale_x, -scale_y, -scale_z],     # 1: right-bottom-back  
+                [scale_x, -scale_y, scale_z],      # 2: right-bottom-front
+                [-scale_x, -scale_y, scale_z],     # 3: left-bottom-front
+                # Top face (glasses frame top)
+                [-scale_x, scale_y, -scale_z],     # 4: left-top-back
+                [scale_x, scale_y, -scale_z],      # 5: right-top-back
+                [scale_x, scale_y, scale_z],       # 6: right-top-front
+                [-scale_x, scale_y, scale_z]       # 7: left-top-front
+            ]) * size
+        else:
+            # Standard rectangular device
+            vertices = np.array([
+                # Bottom face
+                [-scale_x, -scale_y, -scale_z],
+                [scale_x, -scale_y, -scale_z],
+                [scale_x, scale_y, -scale_z],
+                [-scale_x, scale_y, -scale_z],
+                # Top face  
+                [-scale_x, -scale_y, scale_z],
+                [scale_x, -scale_y, scale_z],
+                [scale_x, scale_y, scale_z],
+                [-scale_x, scale_y, scale_z]
+            ]) * size
         
         return vertices
     

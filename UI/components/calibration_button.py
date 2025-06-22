@@ -1,8 +1,8 @@
 """Calibration button component"""
 
 import pygame
-from UI.utils.colors import Colors
-from UI.utils.fonts import FontManager
+from ..utils.colors import Colors
+from ..utils.fonts import FontManager
 
 class CalibrationButton:
     """Calibration button with hover effects"""

@@ -1,7 +1,7 @@
-"""Color definitions for the IMU visualizer"""
+"""Color definitions for the IMU visualizer with AR Glasses support"""
 
 class Colors:
-    """Enhanced color scheme for IMU visualizer"""
+    """Enhanced color scheme for IMU visualizer with AR Glasses"""
     
     # Background colors
     BG = (15, 15, 25)
@@ -18,9 +18,10 @@ class Colors:
     TEXT_TERTIARY = (120, 120, 120)
     
     # Device colors
-    PHONE = (255, 100, 100)
-    HEADPHONE = (100, 255, 100)
-    WATCH = (100, 100, 255)
+    PHONE = (255, 100, 100)        # Red - Phone
+    HEADPHONE = (100, 255, 100)    # Green - AirPods/Headphones
+    WATCH = (100, 100, 255)        # Blue - Apple Watch
+    GLASSES = (255, 150, 50)       # Orange - AR Glasses
     
     # Axis colors
     AXIS_X = (255, 60, 60)      # Red - X axis
@@ -45,7 +46,8 @@ class Colors:
         device_colors = {
             'phone': cls.PHONE,
             'headphone': cls.HEADPHONE,
-            'watch': cls.WATCH
+            'watch': cls.WATCH,
+            'glasses': cls.GLASSES
         }
         return device_colors.get(device_name, cls.TEXT_SECONDARY)
     

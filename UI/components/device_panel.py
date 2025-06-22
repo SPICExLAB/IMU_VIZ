@@ -1,4 +1,4 @@
-"""Device panel component for 3D visualization"""
+"""Device panel component for 3D visualization with AR Glasses support"""
 
 import pygame
 import numpy as np
@@ -8,7 +8,7 @@ from ..utils.fonts import FontManager
 from ..utils.renderer_3d import Renderer3D
 
 class DevicePanel:
-    """Individual device 3D visualization panel"""
+    """Individual device 3D visualization panel with AR Glasses support"""
     
     def __init__(self, screen, device_name, position_info):
         self.screen = screen
@@ -25,7 +25,8 @@ class DevicePanel:
         self.display_names = {
             'phone': 'Phone',
             'headphone': 'AirPods', 
-            'watch': 'Watch'
+            'watch': 'Watch',
+            'glasses': 'AR Glasses'
         }
     
     def draw(self, device_data=None, is_calibrated=False):
@@ -60,8 +61,14 @@ class DevicePanel:
         pygame.draw.rect(self.screen, Colors.PANEL, (x, y, w, h))
         pygame.draw.rect(self.screen, Colors.get_device_color(self.device_name), (x, y, w, h), 2)
         
-        # Draw 3D device (smaller relative to box size)
-        device_size = self.size * 0.25  # Smaller 3D model
+        # Draw 3D device (adjust size based on device type and box size)
+        if self.device_name == 'glasses':
+            # AR Glasses - use appropriate scaling for horizontal glasses
+            device_size = min(w, h) * 0.12  # Smaller base size for glasses proportions
+        else:
+            # Other devices
+            device_size = self.size * 0.25
+        
         device_center = (self.center[0], self.center[1])
         
         self._draw_3d_device(device_center, device_data['quaternion'], 
@@ -73,7 +80,7 @@ class DevicePanel:
     
     def _draw_3d_device(self, center, quaternion, color, device_size):
         """Draw 3D device representation"""
-        # Get device vertices
+        # Get device vertices (now includes glasses shape)
         vertices = self.renderer.create_device_vertices(self.device_name, device_size)
         
         # Apply quaternion rotation
@@ -129,8 +136,12 @@ class DevicePanel:
                     end = face_points[(i + 1) % len(face)]
                     pygame.draw.line(self.screen, color, start, end, 2)
         
-        # Draw coordinate axes
-        axis_length = device_size * 0.8
+        # Draw coordinate axes (smaller for glasses)
+        if self.device_name == 'glasses':
+            axis_length = device_size * 0.6  # Shorter axes for glasses
+        else:
+            axis_length = device_size * 0.8
+            
         axis_colors = [Colors.AXIS_X, Colors.AXIS_Y, Colors.AXIS_Z]
         self.renderer.draw_3d_axes(center, quaternion, axis_length, 
                                  axis_colors=axis_colors, 
@@ -162,8 +173,12 @@ class DevicePanel:
         text_rect = text.get_rect(center=self.center)
         self.screen.blit(text, text_rect)
         
-        # Status
-        status_text = self.font_manager.render_text("Waiting for data...", 'tiny', color)
+        # Status - special message for AR glasses
+        if self.device_name == 'glasses':
+            status_text = self.font_manager.render_text("Run Unity app on glasses", 'tiny', color)
+        else:
+            status_text = self.font_manager.render_text("Waiting for data...", 'tiny', color)
+        
         status_rect = status_text.get_rect(centerx=self.center[0], y=self.center[1] + 15)
         self.screen.blit(status_text, status_rect)
     
