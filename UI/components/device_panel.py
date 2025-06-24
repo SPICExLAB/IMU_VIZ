@@ -1,4 +1,4 @@
-"""Device panel component for 3D visualization - simplified and fixed"""
+"""Device panel component for 3D visualization - with gravity toggle for AR glasses"""
 
 import pygame
 import numpy as np
@@ -8,7 +8,7 @@ from ..utils.fonts import FontManager
 from ..utils.renderer_3d import Renderer3D
 
 class DevicePanel:
-    """Individual device 3D visualization panel - keeping original coordinate system"""
+    """Individual device 3D visualization panel - with gravity toggle for glasses"""
     
     def __init__(self, screen, device_name, position_info):
         self.screen = screen
@@ -28,15 +28,18 @@ class DevicePanel:
             'watch': 'Watch',
             'glasses': 'AR Glasses'
         }
+        
+        # Gravity toggle button for glasses (will be set when drawing)
+        self.gravity_button_rect = None
     
-    def draw(self, device_data=None, is_calibrated=False):
-        """Draw the device panel"""
+    def draw(self, device_data=None, is_calibrated=False, gravity_enabled=True):
+        """Draw the device panel with optional gravity toggle"""
         if self.is_active and device_data:
-            self._draw_active_device(device_data, is_calibrated)
+            self._draw_active_device(device_data, is_calibrated, gravity_enabled)
         else:
             self._draw_inactive_device()
     
-    def _draw_active_device(self, device_data, is_calibrated):
+    def _draw_active_device(self, device_data, is_calibrated, gravity_enabled):
         """Draw active device with 3D visualization"""
         x, y, w, h = self.position_info['bounds']
         
@@ -61,6 +64,10 @@ class DevicePanel:
         pygame.draw.rect(self.screen, Colors.PANEL, (x, y, w, h))
         pygame.draw.rect(self.screen, Colors.get_device_color(self.device_name), (x, y, w, h), 2)
         
+        # Draw gravity toggle button for AR glasses
+        if self.device_name == 'glasses':
+            self._draw_gravity_toggle_button(x, y, w, h, gravity_enabled)
+        
         # Draw 3D device (adjust size based on device type and box size)
         if self.device_name == 'glasses':
             # AR Glasses - use appropriate scaling for horizontal glasses
@@ -74,13 +81,45 @@ class DevicePanel:
         self._draw_3d_device(device_center, device_data['quaternion'], 
                            Colors.get_device_color(self.device_name), device_size)
         
-        # # Draw calibrate button at bottom of box
-        # if not is_calibrated:
-        #     self._draw_calibrate_prompt(x, y, w, h)
-        
         # Draw additional info for glasses
         if self.device_name == 'glasses':
-            self._draw_glasses_info(device_data, x, y, w, h)
+            self._draw_glasses_info(device_data, x, y, w, h, gravity_enabled)
+    
+    def _draw_gravity_toggle_button(self, x, y, w, h, gravity_enabled):
+        """Draw gravity toggle button in bottom right corner of glasses panel"""
+        button_size = 30
+        button_margin = 5
+        button_x = x + w - button_size - button_margin
+        button_y = y + h - button_size - button_margin
+        
+        # Store button rect for click detection
+        self.gravity_button_rect = pygame.Rect(button_x, button_y, button_size, button_size)
+        
+        # Button colors based on state
+        if gravity_enabled:
+            button_color = (100, 200, 100)  # Green when gravity removal enabled
+            text_color = (0, 0, 0)
+            button_text = "G"
+        else:
+            button_color = (200, 100, 100)  # Red when gravity removal disabled
+            text_color = (255, 255, 255)
+            button_text = "G"
+        
+        # Draw button background
+        pygame.draw.rect(self.screen, button_color, self.gravity_button_rect)
+        pygame.draw.rect(self.screen, Colors.TEXT, self.gravity_button_rect, 2)
+        
+        # Draw button text
+        text_surface = self.font_manager.render_text(button_text, 'small', text_color)
+        text_rect = text_surface.get_rect(center=self.gravity_button_rect.center)
+        self.screen.blit(text_surface, text_rect)
+        
+        # Tooltip text near button
+        tooltip_text = "Remove gravity" if gravity_enabled else "Include gravity"
+        tooltip_surface = self.font_manager.render_text(tooltip_text, 'tiny', Colors.TEXT_TERTIARY)
+        tooltip_x = button_x - tooltip_surface.get_width() - 10
+        tooltip_y = button_y + (button_size - tooltip_surface.get_height()) // 2
+        self.screen.blit(tooltip_surface, (tooltip_x, tooltip_y))
     
     def _draw_3d_device(self, center, quaternion, color, device_size):
         """Draw 3D device representation with device-specific coordinate handling"""
@@ -142,7 +181,7 @@ class DevicePanel:
         
         # Draw coordinate axes with device-specific handling
         if self.device_name == 'glasses':
-            axis_length = device_size * 0.7  # Appropriate for glasses
+            axis_length = device_size * 0.5  # Appropriate for glasses
         else:
             axis_length = device_size * 0.8
             
@@ -153,7 +192,7 @@ class DevicePanel:
                                 font_manager=self.font_manager,
                                 device_type=self.device_name)  # NEW PARAMETER
     
-    def _draw_glasses_info(self, device_data, x, y, w, h):
+    def _draw_glasses_info(self, device_data, x, y, w, h, gravity_enabled):
         """Draw additional info specific to AR glasses"""
         # Check if we have Euler angle data
         coord_note = "AR Glasses: Z is forward"
@@ -161,12 +200,19 @@ class DevicePanel:
         coord_rect = coord_surface.get_rect(centerx=x + w//2, y=y + 5)
         self.screen.blit(coord_surface, coord_rect)
         
+        # Show gravity removal status
+        gravity_status = "Gravity: Removed" if gravity_enabled else "Gravity: Included"
+        gravity_color = (100, 200, 100) if gravity_enabled else (200, 100, 100)
+        gravity_surface = self.font_manager.render_text(gravity_status, 'tiny', gravity_color)
+        gravity_rect = gravity_surface.get_rect(centerx=x + w//2, y=y + 18)
+        self.screen.blit(gravity_surface, gravity_rect)
+        
         if 'euler' in device_data and device_data['euler'] is not None:
             euler = device_data['euler']
             nod, tilt, turn = euler[0], euler[1], euler[2]
             
-            # Show head movement info at bottom of box
-            info_y = y + h - 40
+            # Show head movement info at bottom of box (above the button)
+            info_y = y + h - 65  # Higher to make room for button
             
             # NOD (up/down) - X rotation in your coordinate system
             nod_text = f"NOD: {nod:+5.1f}°"
@@ -185,9 +231,6 @@ class DevicePanel:
             tilt_color = Colors.AXIS_Z if abs(tilt) > 5 else Colors.TEXT_TERTIARY
             tilt_surface = self.font_manager.render_text(tilt_text, 'tiny', tilt_color)
             self.screen.blit(tilt_surface, (x + 5, info_y + 24))
-
-         
-            
     
     def _draw_inactive_device(self):
         """Draw inactive/waiting device"""
@@ -223,6 +266,16 @@ class DevicePanel:
         
         status_rect = status_text.get_rect(centerx=self.center[0], y=self.center[1] + 15)
         self.screen.blit(status_text, status_rect)
+    
+    def handle_click(self, pos):
+        """Handle click events on the device panel"""
+        # Check gravity toggle button for glasses
+        if (self.device_name == 'glasses' and 
+            self.gravity_button_rect and 
+            self.gravity_button_rect.collidepoint(pos)):
+            return 'toggle_gravity'
+        
+        return None
     
     def _draw_calibrate_prompt(self, x, y, w, h):
         """Draw calibration prompt at bottom of active device box"""

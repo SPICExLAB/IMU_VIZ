@@ -13,7 +13,7 @@ class Renderer3D:
         'phone': (0.4, 1.0, 0.08),      # iPhone: thin rectangle
         'headphone': (0.6, 0.6, 0.6),   # AirPods: smaller cube
         'watch': (0.8, 0.8, 0.3),       # Watch: square with depth
-        'glasses': (2.5, 1.0, 0.5)      # AR Glasses: x:y:z = 5:2:1 ratio, wide horizontal
+        'glasses': (1.5, 0.5, 0.1)      # AR Glasses: x:y:z = 5:2:0.5 ratio, wide horizontal
     }
     
     def __init__(self, screen):

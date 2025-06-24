@@ -1,4 +1,4 @@
-"""Main IMU Visualizer - Enhanced with AR Glasses Support"""
+"""Main IMU Visualizer - Enhanced with AR Glasses Support and Gravity Toggle"""
 
 import pygame
 import numpy as np
@@ -14,7 +14,7 @@ from .components.calibration_button import CalibrationButton
 from .layouts.device_grid import DeviceGridLayout
 
 class IMUVisualizer:
-    """Enhanced IMU visualizer with AR Glasses support"""
+    """Enhanced IMU visualizer with AR Glasses support and gravity toggle"""
     
     def __init__(self, width=1400, height=800):
         pygame.init()
@@ -34,6 +34,9 @@ class IMUVisualizer:
         # Device data storage
         self.device_data = {}
         
+        # Gravity toggle state (True = remove gravity, False = include gravity)
+        self.gravity_removal_enabled = True
+        
         # Initialize components
         self._init_components()
         
@@ -43,7 +46,7 @@ class IMUVisualizer:
         # Waveform settings
         self.waveform_history = 300
         
-        print("Enhanced IMU Visualizer initialized with AR Glasses support")
+        print("Enhanced IMU Visualizer initialized with AR Glasses support and gravity toggle")
     
     def _init_components(self):
         """Initialize UI components"""
@@ -128,6 +131,16 @@ class IMUVisualizer:
                 active.append(device_id)
         return active
     
+    def get_gravity_enabled(self):
+        """Get current gravity removal state"""
+        return self.gravity_removal_enabled
+    
+    def toggle_gravity_removal(self):
+        """Toggle gravity removal for AR glasses"""
+        self.gravity_removal_enabled = not self.gravity_removal_enabled
+        print(f"Gravity removal {'enabled' if self.gravity_removal_enabled else 'disabled'} for AR glasses")
+        return "toggle_gravity"
+    
     def _update_device_panels(self):
         """Update device panels based on active devices"""
         active_devices = self.get_active_devices()
@@ -162,6 +175,13 @@ class IMUVisualizer:
                 if self.calibration_button.is_clicked(event):
                     return "calibrate"
                 
+                # Check device panel clicks (gravity toggle)
+                for device_name, device_panel in self.device_panels.items():
+                    if device_panel.is_active:
+                        panel_action = device_panel.handle_click(event.pos)
+                        if panel_action == 'toggle_gravity':
+                            return self.toggle_gravity_removal()
+                
                 # Check waveform panel clicks
                 waveform_action = self.waveform_panel.handle_click(event.pos)
                 if waveform_action:
@@ -188,7 +208,8 @@ class IMUVisualizer:
             if device_name in self.device_panels:
                 device_data = self.device_data.get(device_name)
                 is_calibrated = device_data['is_calibrated'] if device_data else False
-                self.device_panels[device_name].draw(device_data, is_calibrated)
+                # Pass gravity enabled state to device panels
+                self.device_panels[device_name].draw(device_data, is_calibrated, self.gravity_removal_enabled)
         
         # Draw calibration button
         self.calibration_button.draw()
@@ -231,8 +252,15 @@ class IMUVisualizer:
         port_text = "Listening on UDP port 8001"
         port_surface = self.font_manager.render_text(port_text, 'tiny', Colors.TEXT_TERTIARY)
         self.screen.blit(port_surface, (20, self.height - 45))
+        
+        # Show gravity removal status for AR glasses
+        if 'glasses' in active_devices:
+            gravity_status = f"AR Glasses Gravity: {'Removed' if self.gravity_removal_enabled else 'Included'}"
+            gravity_color = (100, 200, 100) if self.gravity_removal_enabled else (200, 100, 100)
+            gravity_surface = self.font_manager.render_text(gravity_status, 'tiny', gravity_color)
+            self.screen.blit(gravity_surface, (300, self.height - 45))
     
     def cleanup(self):
         """Clean up resources"""
         pygame.quit()
-        print("Enhanced IMU visualizer with AR Glasses support cleaned up")
+        print("Enhanced IMU visualizer with AR Glasses support and gravity toggle cleaned up")

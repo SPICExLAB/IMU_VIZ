@@ -21,6 +21,7 @@ from scipy.spatial.transform import Rotation as R
 
 # Import our refactored visualization module
 from UI.main_visualizer import IMUVisualizer
+from imu_data_api import IMUDataAPI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,7 +37,6 @@ class IMUData:
     euler: np.ndarray = None   # [nod, tilt, turn] for Rokid glasses
 
 class MobilePoseCalibrator:
-    """Fixed calibration for different coordinate systems"""
     
     def __init__(self):
         # Store reference quaternions for each device (the "zero" position)
@@ -155,6 +155,17 @@ class IMUReceiver:
         self.assignment_index = 0
         
         logger.info(f"Enhanced IMU Receiver initialized on port {port}")
+        self.api = IMUDataAPI(self)
+        logger.info("API available via receiver.api")
+
+    def get_api(self) -> IMUDataAPI:
+        """
+        Get the IMU Data API instance
+        
+        Returns:
+            IMUDataAPI instance for external access
+        """
+        return self.api
     
     def start_server(self):
         """Start UDP server"""
@@ -232,22 +243,26 @@ class IMUReceiver:
             raw_accel = np.array([float(parts[6]), float(parts[7]), float(parts[8])])
             gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
             
-            # DYNAMIC GRAVITY REMOVAL
-            try:
-                # Convert left-handed Unity quaternion to right-handed for gravity calculation only
-                quat_right_handed = np.array([-quat[0], quat[1], quat[2], -quat[3]])
-                rotation = R.from_quat(quat_right_handed)
-                
-                # Define gravity vector in world frame and transform to device frame
-                gravity_magnitude = np.linalg.norm(raw_accel)
-                gravity_world = np.array([0, 0, gravity_magnitude])
-                gravity_device_frame = rotation.inv().apply(gravity_world)
-                
-                # Remove gravity from raw acceleration
-                linear_accel = raw_accel - gravity_device_frame
-                
-            except Exception as e:
-                logger.warning(f"Gravity removal failed: {e}, using raw acceleration")
+            # CONDITIONAL GRAVITY REMOVAL based on visualizer toggle
+            if self.visualizer.get_gravity_enabled():
+                try:
+                    # Convert left-handed Unity quaternion to right-handed for gravity calculation only
+                    quat_right_handed = np.array([-quat[0], quat[1], quat[2], -quat[3]])
+                    rotation = R.from_quat(quat_right_handed)
+                    
+                    # Define gravity vector in world frame and transform to device frame
+                    gravity_magnitude = np.linalg.norm(raw_accel)
+                    gravity_world = np.array([0, 0, gravity_magnitude])
+                    gravity_device_frame = rotation.inv().apply(gravity_world)
+                    
+                    # Remove gravity from raw acceleration
+                    linear_accel = raw_accel - gravity_device_frame
+                    
+                except Exception as e:
+                    logger.warning(f"Gravity removal failed: {e}, using raw acceleration")
+                    linear_accel = raw_accel
+            else:
+                # Use raw acceleration when gravity removal is disabled
                 linear_accel = raw_accel
             
             # Convert quaternion to Euler angles for display
@@ -276,7 +291,7 @@ class IMUReceiver:
             imu_data = IMUData(
                 timestamp=timestamp,
                 device_id=device_id,
-                accelerometer=linear_accel,  # Gravity-removed acceleration
+                accelerometer=linear_accel,  # Conditionally gravity-removed acceleration
                 gyroscope=gyro,
                 quaternion=quat,  # Use ORIGINAL quaternion for correct visualization
                 euler=euler_deg  # NOD, TILT, TURN in degrees
@@ -291,9 +306,14 @@ class IMUReceiver:
                 self._gravity_log_counter = 0
                 
             if self._gravity_log_counter % 300 == 0:  # Every ~5 seconds at 60Hz
-                gravity_magnitude = np.linalg.norm(gravity_device_frame)
-                linear_magnitude = np.linalg.norm(linear_accel)
-                logger.info(f"Glasses gravity removal - Gravity mag: {gravity_magnitude:.2f}, Linear acc mag: {linear_magnitude:.2f}")
+                gravity_enabled = self.visualizer.get_gravity_enabled()
+                if gravity_enabled:
+                    gravity_magnitude = np.linalg.norm(gravity_device_frame)
+                    linear_magnitude = np.linalg.norm(linear_accel)
+                    # logger.info(f"Glasses gravity removal - Gravity mag: {gravity_magnitude:.2f}, Linear acc mag: {linear_magnitude:.2f}")
+                else:
+                    raw_magnitude = np.linalg.norm(raw_accel)
+                    # logger.info(f"Glasses raw acceleration - Magnitude: {raw_magnitude:.2f}")
                 
         except (ValueError, IndexError) as e:
             logger.warning(f"Rokid Glasses data parse error: {e} - Data: {message}")
