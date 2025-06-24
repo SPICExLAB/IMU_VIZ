@@ -43,39 +43,78 @@ class MobilePoseCalibrator:
         self.reference_quaternions = {}
         
     def set_reference_orientation(self, device_id: str, current_quaternion: np.ndarray):
-        """Set current orientation as the reference/zero position (T-pose style)"""
-        # Store the current quaternion as reference
-        self.reference_quaternions[device_id] = current_quaternion.copy()
-        logger.info(f"Set reference orientation for {device_id}")
-        logger.info(f"   Reference quat: [{current_quaternion[0]:.3f}, {current_quaternion[1]:.3f}, {current_quaternion[2]:.3f}, {current_quaternion[3]:.3f}]")
+        """Set current orientation as the reference/zero position with device-specific handling"""
         
-        # For Rokid glasses, also log the euler angles at calibration
         if device_id == 'glasses':
+            # For Rokid glasses, we need to handle their Z-backward coordinate system
+            # Apply a coordinate system transform before storing reference
             try:
-                r = R.from_quat(current_quaternion)
-                euler = r.as_euler('xyz', degrees=True)
-                logger.info(f"   Reference euler: NOD={euler[0]:.1f}° TILT={euler[1]:.1f}° TURN={euler[2]:.1f}°")
-            except:
-                pass
+                # Create rotation that flips Z axis for glasses (Z backward -> Z forward)
+                # This is a 180-degree rotation around Y axis
+                z_flip_rotation = R.from_euler('y', 180, degrees=True)
+                
+                # Apply the flip to the current quaternion
+                current_rotation = R.from_quat(current_quaternion)
+                flipped_rotation = z_flip_rotation * current_rotation
+                
+                # Store the flipped quaternion as reference
+                self.reference_quaternions[device_id] = flipped_rotation.as_quat()
+                
+                logger.info(f"Set reference orientation for {device_id} (with Z-flip)")
+                logger.info(f"   Original quat: [{current_quaternion[0]:.3f}, {current_quaternion[1]:.3f}, {current_quaternion[2]:.3f}, {current_quaternion[3]:.3f}]")
+                logger.info(f"   Reference quat: [{flipped_rotation.as_quat()[0]:.3f}, {flipped_rotation.as_quat()[1]:.3f}, {flipped_rotation.as_quat()[2]:.3f}, {flipped_rotation.as_quat()[3]:.3f}]")
+            
+            except Exception as e:
+                logger.warning(f"Failed to apply coordinate transform for glasses: {e}")
+                # Fallback to standard behavior
+                self.reference_quaternions[device_id] = current_quaternion.copy()
+        else:
+            # Standard behavior for Apple devices
+            self.reference_quaternions[device_id] = current_quaternion.copy()
+            logger.info(f"Set reference orientation for {device_id}")
+            logger.info(f"   Reference quat: [{current_quaternion[0]:.3f}, {current_quaternion[1]:.3f}, {current_quaternion[2]:.3f}, {current_quaternion[3]:.3f}]")
+        
+        # For all devices, log the euler angles at calibration
+        try:
+            if device_id == 'glasses':
+                # Use the flipped quaternion for Euler calculation
+                ref_quat = self.reference_quaternions[device_id]
+            else:
+                ref_quat = current_quaternion
+                
+            r = R.from_quat(ref_quat)
+            euler = r.as_euler('xyz', degrees=True)
+            logger.info(f"   Reference euler: NOD={euler[0]:.1f}° TURN={euler[1]:.1f}° TILT={euler[2]:.1f}°")
+        except:
+            pass
     
     def get_relative_orientation(self, device_id: str, current_quaternion: np.ndarray) -> np.ndarray:
-        """Get orientation relative to the reference position"""
+        """Get orientation relative to the reference position with device-specific handling"""
         if device_id not in self.reference_quaternions:
             # No reference set, return current orientation
             return current_quaternion
         
-        # Calculate relative orientation: q_relative = q_reference^-1 * q_current
+        # Calculate relative orientation
         ref_quat = self.reference_quaternions[device_id]
         
         # Use scipy for proper quaternion operations
         try:
             ref_rotation = R.from_quat(ref_quat)
-            current_rotation = R.from_quat(current_quaternion)
             
-            # Get relative rotation: ref_inv * current
-            relative_rotation = ref_rotation.inv() * current_rotation
+            if device_id == 'glasses':
+                # For glasses, apply the same Z-flip to current quaternion before comparison
+                z_flip_rotation = R.from_euler('y', 180, degrees=True)
+                current_rotation = R.from_quat(current_quaternion)
+                flipped_current = z_flip_rotation * current_rotation
+                
+                # Get relative rotation: ref_inv * flipped_current
+                relative_rotation = ref_rotation.inv() * flipped_current
+            else:
+                # Standard behavior for Apple devices
+                current_rotation = R.from_quat(current_quaternion)
+                relative_rotation = ref_rotation.inv() * current_rotation
+            
             relative_quat = relative_rotation.as_quat()
-            
             return relative_quat
             
         except Exception as e:
@@ -94,8 +133,8 @@ class MobilePoseCalibrator:
         else:
             logger.warning("No active devices to calibrate")
 
-class EnhancedIMUReceiver:
-    """Enhanced IMU receiver with fixed Rokid glasses support"""
+class IMUReceiver:
+    """IMU receiver with fixed Rokid glasses support"""
     
     def __init__(self, port=8001):
         self.port = port
@@ -172,43 +211,60 @@ class EnhancedIMUReceiver:
                     
         except Exception as e:
             logger.warning(f"Parse error: {e}")
+
     
     def _parse_rokid_glasses_data(self, message, addr):
-        """Parse Rokid Glasses Unity data format: timestamp device_timestamp quat_x quat_y quat_z quat_w acc_x acc_y acc_z gyro_x gyro_y gyro_z"""
+        """Parse Rokid Glasses Unity data format with dynamic gravity removal"""
         try:
             parts = message.split()
             if len(parts) != 12:
                 logger.warning(f"Rokid Glasses data format error: expected 12 values, got {len(parts)}")
                 return
                 
-            # Parse Unity's format with remapped quaternion and sensor data
+            # Parse Unity's format
             timestamp = float(parts[0])
             device_timestamp = float(parts[1])
             
             # Parse gameRotation quaternion from Unity (x, y, z, w format)
             quat = np.array([float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])])
             
-            # Parse remapped accelerometer data (RIGHT, UP, FORWARD positive)
-            accel = np.array([float(parts[6]), float(parts[7]), float(parts[8])])
-            
-            # Parse remapped gyroscope data
+            # Parse sensor data
+            raw_accel = np.array([float(parts[6]), float(parts[7]), float(parts[8])])
             gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
             
-            # Convert quaternion to intuitive Euler angles for display
+            # DYNAMIC GRAVITY REMOVAL
+            try:
+                # Convert left-handed Unity quaternion to right-handed for gravity calculation only
+                quat_right_handed = np.array([-quat[0], quat[1], quat[2], -quat[3]])
+                rotation = R.from_quat(quat_right_handed)
+                
+                # Define gravity vector in world frame and transform to device frame
+                gravity_magnitude = np.linalg.norm(raw_accel)
+                gravity_world = np.array([0, 0, gravity_magnitude])
+                gravity_device_frame = rotation.inv().apply(gravity_world)
+                
+                # Remove gravity from raw acceleration
+                linear_accel = raw_accel - gravity_device_frame
+                
+            except Exception as e:
+                logger.warning(f"Gravity removal failed: {e}, using raw acceleration")
+                linear_accel = raw_accel
+            
+            # Convert quaternion to Euler angles for display
             euler_deg = None
             try:
-                # Convert to Euler angles using standard xyz order
-                rotation = R.from_quat(quat)
+                # Use right-handed quaternion for Euler conversion
+                quat_right_handed = np.array([-quat[0], quat[1], quat[2], -quat[3]])
+                rotation = R.from_quat(quat_right_handed)
                 euler_rad = rotation.as_euler('xyz', degrees=False)
                 euler_deg = euler_rad * 180.0 / np.pi
                 
-                # Map to intuitive head movements based on your coordinate system:
-                # X=Right, Y=Up, Z=away from user
+                # Map to head movements: nod, turn, tilt
                 nod = euler_deg[0]    # X rotation = NOD (up/down)
-                turn = euler_deg[1]   # Y rotation = TURN (left/right rotation)  
-                tilt = euler_deg[2]   # Z rotation = TILT (left/right tilt)
+                turn = euler_deg[2]   # Y rotation = TURN (left/right)  
+                tilt = euler_deg[1]   # Z rotation = TILT (left/right tilt)
                 
-                euler_deg = np.array([nod, tilt, turn])
+                euler_deg = np.array([nod, tilt, turn])  # Store as [nod, tilt, turn]
                 
             except:
                 euler_deg = np.array([0, 0, 0])
@@ -220,13 +276,24 @@ class EnhancedIMUReceiver:
             imu_data = IMUData(
                 timestamp=timestamp,
                 device_id=device_id,
-                accelerometer=accel,
+                accelerometer=linear_accel,  # Gravity-removed acceleration
                 gyroscope=gyro,
-                quaternion=quat,
+                quaternion=quat,  # Use ORIGINAL quaternion for correct visualization
                 euler=euler_deg  # NOD, TILT, TURN in degrees
             )
             
             self.data_queue.put(imu_data)
+            
+            # Optional: Log gravity removal info periodically
+            if hasattr(self, '_gravity_log_counter'):
+                self._gravity_log_counter += 1
+            else:
+                self._gravity_log_counter = 0
+                
+            if self._gravity_log_counter % 300 == 0:  # Every ~5 seconds at 60Hz
+                gravity_magnitude = np.linalg.norm(gravity_device_frame)
+                linear_magnitude = np.linalg.norm(linear_accel)
+                logger.info(f"Glasses gravity removal - Gravity mag: {gravity_magnitude:.2f}, Linear acc mag: {linear_magnitude:.2f}")
                 
         except (ValueError, IndexError) as e:
             logger.warning(f"Rokid Glasses data parse error: {e} - Data: {message}")
@@ -435,15 +502,12 @@ class EnhancedIMUReceiver:
             self.visualizer.cleanup()
 
 def main():
-    print("Rokid AR Glasses IMU Receiver")
     print("=============================")
     print("Coordinate Systems:")
     print("  Apple devices: Z toward user (standard)")
     print("  Rokid glasses: Z away from user (mirrored)")
-    print("  Visualization: Mirror effect for glasses")
-    print()
     
-    receiver = EnhancedIMUReceiver(port=8001)
+    receiver = IMUReceiver(port=8001)
     receiver.run()
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ class ReferencePanel:
         explanations = [
             ("X-axis (Red):", "Right", Colors.AXIS_X),
             ("Y-axis (Green):", "Up", Colors.AXIS_Y),
-            ("Z-axis (Blue):", "Toward User", Colors.AXIS_Z)
+            ("Z-axis (Blue):", "To user*", Colors.AXIS_Z)
         ]
         
         start_y = self.y + 70
@@ -57,6 +57,11 @@ class ReferencePanel:
             # Direction explanation
             dir_text = self.font_manager.render_text(direction, 'small', Colors.TEXT_TERTIARY)
             self.screen.blit(dir_text, (self.x + 120, y_pos))
+        
+        # # Add note about glasses coordinate system
+        # note_y = start_y + 80
+        # note_text = self.font_manager.render_text("*AR Glasses: Z is backward", 'tiny', Colors.GLASSES)
+        # self.screen.blit(note_text, (self.x + 20, note_y))
     
     def _draw_reference_system(self):
         """Draw the 3D reference coordinate system"""

@@ -83,7 +83,7 @@ class DevicePanel:
             self._draw_glasses_info(device_data, x, y, w, h)
     
     def _draw_3d_device(self, center, quaternion, color, device_size):
-        """Draw 3D device representation - SIMPLE, no coordinate transforms"""
+        """Draw 3D device representation with device-specific coordinate handling"""
         # Get device vertices
         vertices = self.renderer.create_device_vertices(self.device_name, device_size)
         
@@ -132,7 +132,7 @@ class DevicePanel:
             try:
                 pygame.draw.polygon(self.screen, face_color, face_points)
                 pygame.draw.polygon(self.screen, tuple(min(255, c + 40) for c in face_color), 
-                                  face_points, 2)
+                                face_points, 2)
             except:
                 # Fallback to wireframe
                 for i in range(len(face)):
@@ -140,23 +140,30 @@ class DevicePanel:
                     end = face_points[(i + 1) % len(face)]
                     pygame.draw.line(self.screen, color, start, end, 2)
         
-        # Draw coordinate axes - NO device-specific handling
+        # Draw coordinate axes with device-specific handling
         if self.device_name == 'glasses':
             axis_length = device_size * 0.7  # Appropriate for glasses
         else:
             axis_length = device_size * 0.8
             
         axis_colors = [Colors.AXIS_X, Colors.AXIS_Y, Colors.AXIS_Z]
+        # PASS DEVICE TYPE TO RENDERER
         self.renderer.draw_3d_axes(center, quaternion, axis_length, 
-                                 axis_colors=axis_colors, 
-                                 font_manager=self.font_manager)
+                                axis_colors=axis_colors, 
+                                font_manager=self.font_manager,
+                                device_type=self.device_name)  # NEW PARAMETER
     
     def _draw_glasses_info(self, device_data, x, y, w, h):
         """Draw additional info specific to AR glasses"""
         # Check if we have Euler angle data
+        coord_note = "AR Glasses: Z is forward"
+        coord_surface = self.font_manager.render_text(coord_note, 'tiny', Colors.GLASSES)
+        coord_rect = coord_surface.get_rect(centerx=x + w//2, y=y + 5)
+        self.screen.blit(coord_surface, coord_rect)
+        
         if 'euler' in device_data and device_data['euler'] is not None:
             euler = device_data['euler']
-            nod, turn,tilt = euler[0], euler[1], euler[2]
+            nod, tilt, turn = euler[0], euler[1], euler[2]
             
             # Show head movement info at bottom of box
             info_y = y + h - 40
@@ -178,36 +185,9 @@ class DevicePanel:
             tilt_color = Colors.AXIS_Z if abs(tilt) > 5 else Colors.TEXT_TERTIARY
             tilt_surface = self.font_manager.render_text(tilt_text, 'tiny', tilt_color)
             self.screen.blit(tilt_surface, (x + 5, info_y + 24))
+
+         
             
-            
-            
-            # Movement interpretation
-            movements = []
-            if abs(nod) > 10:
-                direction = "UP" if nod > 0 else "DOWN"
-                movements.append(f"Looking {direction}")
-            if abs(tilt) > 10:
-                direction = "RIGHT" if tilt > 0 else "LEFT"
-                movements.append(f"Tilted {direction}")
-            if abs(turn) > 10:
-                direction = "LEFT" if turn > 0 else "RIGHT"
-                movements.append(f"Turned {direction}")
-            
-            # Show movement status
-            if movements:
-                status_text = ", ".join(movements)
-                status_color = Colors.CONE_HIGHLIGHT
-            else:
-                status_text = "LEVEL"
-                status_color = Colors.CALIBRATED
-            
-            # Wrap text if too long
-            if len(status_text) > 15:
-                status_text = movements[0] if movements else "MOVING"
-            
-            status_surface = self.font_manager.render_text(status_text, 'tiny', status_color)
-            status_rect = status_surface.get_rect(right=x + w - 5, bottom=y + h - 5)
-            self.screen.blit(status_surface, status_rect)
     
     def _draw_inactive_device(self):
         """Draw inactive/waiting device"""

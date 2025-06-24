@@ -125,19 +125,29 @@ class Renderer3D:
         pygame.draw.line(self.screen, color, end_point, tuple(arrow_right.astype(int)), 3)
     
     def draw_3d_axes(self, center: tuple, quaternion: np.ndarray, axis_length: float = 40, 
-                     axis_colors=None, font_manager=None):
-        """Draw 3D coordinate axes with line arrows"""
+                 axis_colors=None, font_manager=None, device_type='phone'):
+        """Draw 3D coordinate axes with device-specific coordinate systems"""
         # Use provided colors or defaults
         if axis_colors is None:
             axis_colors = [(255, 60, 60), (60, 255, 60), (60, 60, 255)]  # R, G, B
         
-        # Coordinate system directions
-        # Note: Y is positive up in 3D space, but negative in screen space
-        axes_directions = np.array([
-            [1, 0, 0],   # X-axis (Red) - Right
-            [0, 1, 0],   # Y-axis (Green) - Up in 3D space
-            [0, 0, 1]    # Z-axis (Blue) - Forward (toward user)
-        ])
+        # Device-specific coordinate system directions
+        if device_type == 'glasses':
+            # Rokid glasses: Z is BACKWARD (away from user)
+            axes_directions = np.array([
+                [1, 0, 0],   # X-axis (Red) - Right
+                [0, 1, 0],   # Y-axis (Green) - Up
+                [0, 0, -1]   # Z-axis (Blue) - BACKWARD (away from user) - FLIPPED!
+            ])
+            axis_labels = ['X', 'Y', 'Z*']  # Mark Z as different
+        else:
+            # Apple devices: Standard coordinate system (Z forward)
+            axes_directions = np.array([
+                [1, 0, 0],   # X-axis (Red) - Right
+                [0, 1, 0],   # Y-axis (Green) - Up in 3D space
+                [0, 0, 1]    # Z-axis (Blue) - Forward (toward user)
+            ])
+            axis_labels = ['X', 'Y', 'Z']
         
         # Apply quaternion rotation
         if quaternion is not None and np.linalg.norm(quaternion) > 0:
@@ -148,8 +158,6 @@ class Renderer3D:
                 pass
         
         # Draw arrows
-        axis_labels = ['X', 'Y', 'Z']
-        
         for i, (direction, color, label) in enumerate(zip(axes_directions, axis_colors, axis_labels)):
             # For Y axis, flip the screen direction
             screen_direction = direction.copy()
