@@ -1,9 +1,11 @@
 """
-IMU Data API - External interface for accessing calibrated IMU data
+IMU Data API - Socket-based external interface for accessing calibrated IMU data
 File: imu_data_api.py
 """
 
 import time
+import socket
+import json
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import numpy as np
@@ -22,17 +24,42 @@ class CalibratedIMUData:
 
 class IMUDataAPI:
     """
-    External API for accessing calibrated IMU data from IMUReceiver
+    Socket-based API for accessing calibrated IMU data from running IMUReceiver
     """
     
-    def __init__(self, imu_receiver):
-        """
-        Initialize API with reference to IMUReceiver instance
-        
-        Args:
-            imu_receiver: IMUReceiver instance
-        """
-        self.receiver = imu_receiver
+    def __init__(self, api_port=9001):
+        """Initialize API with socket connection to running receiver"""
+        self.api_port = api_port
+        self.socket = None
+        self._connect()
+    
+    def _connect(self):
+        """Connect to the running IMU receiver API server"""
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.socket.settimeout(2.0)  # 2 second timeout
+            
+            # Test connection
+            response = self._send_request("ping")
+            if response and "status" in response and response["status"] == "ok":
+                print("✅ Connected to IMU receiver API server")
+            else:
+                raise ConnectionError("Invalid response from API server")
+                
+        except Exception as e:
+            raise RuntimeError(f"Cannot connect to IMU receiver. Make sure IMU_receiver.py is running. Error: {e}")
+    
+    def _send_request(self, request):
+        """Send request to API server and get response"""
+        try:
+            self.socket.sendto(request.encode('utf-8'), ('127.0.0.1', self.api_port))
+            data, addr = self.socket.recvfrom(4096)
+            response = json.loads(data.decode('utf-8'))
+            return response
+        except socket.timeout:
+            raise RuntimeError("API server timeout. Is IMU_receiver.py still running?")
+        except Exception as e:
+            raise RuntimeError(f"API communication error: {e}")
     
     def get_device_data(self, device_id: str) -> Optional[CalibratedIMUData]:
         """
@@ -44,55 +71,33 @@ class IMUDataAPI:
         Returns:
             CalibratedIMUData object or None if device not active/calibrated
         """
-        if device_id not in self.receiver.current_orientations:
-            return None
-            
-        # Check if device is active (received data recently)
-        device_data = self.receiver.visualizer.device_data.get(device_id)
-        if not device_data:
-            return None
-            
-        current_time = time.time()
-        if current_time - device_data['last_update'] > 2.0:
-            return None  # Device inactive
-            
-        # Get current raw data
-        raw_quaternion = self.receiver.current_orientations[device_id]
-        
-        # Get calibrated quaternion (this is what the 3D visualization uses)
-        calibrated_quat = self.receiver.calibrator.get_relative_orientation(device_id, raw_quaternion)
-        
-        # Convert calibrated quaternion to 3x3 rotation matrix
         try:
-            rotation_matrix = R.from_quat(calibrated_quat).as_matrix()
-        except Exception:
-            rotation_matrix = np.eye(3)  # Identity matrix fallback
+            response = self._send_request(f"get_device:{device_id}")
             
-        # Get latest acceleration (already processed with gravity toggle)
-        acceleration_history = device_data.get('accel_history', [])
-        if len(acceleration_history) == 0:
+            if not response or response is None:
+                return None
+                
+            if "error" in response:
+                return None
+            
+            # Convert response to CalibratedIMUData
+            acceleration = np.array(response['acceleration'])
+            rotation_matrix = np.array(response['rotation_matrix'])
+            gyroscope = np.array(response['gyroscope']) if response['gyroscope'] else None
+            
+            return CalibratedIMUData(
+                timestamp=response['timestamp'],
+                device_name=response['device_name'],
+                frequency=response['frequency'],
+                acceleration=acceleration,
+                rotation_matrix=rotation_matrix,
+                gyroscope=gyroscope,
+                is_calibrated=response['is_calibrated']
+            )
+            
+        except Exception as e:
+            print(f"Error getting device data for {device_id}: {e}")
             return None
-            
-        latest_acceleration = np.array(acceleration_history[-1])
-        
-        # Get gyroscope data if available
-        gyroscope_data = None
-        gyro_history = device_data.get('gyro_history', [])
-        if len(gyro_history) > 0:
-            latest_gyro = np.array(gyro_history[-1])
-            # Only include if it's not zero (some devices don't send gyro)
-            if np.linalg.norm(latest_gyro) > 0.001:
-                gyroscope_data = latest_gyro
-        
-        return CalibratedIMUData(
-            timestamp=device_data['last_update'],
-            device_name=device_id,
-            frequency=device_data.get('frequency', 0.0),
-            acceleration=latest_acceleration,
-            rotation_matrix=rotation_matrix,
-            gyroscope=gyroscope_data,
-            is_calibrated=device_id in self.receiver.calibrator.reference_quaternions
-        )
     
     def get_all_device_data(self) -> Dict[str, CalibratedIMUData]:
         """
@@ -101,12 +106,34 @@ class IMUDataAPI:
         Returns:
             Dictionary mapping device_id to CalibratedIMUData
         """
-        all_data = {}
-        for device_id in self.receiver.device_order:
-            device_data = self.get_device_data(device_id)
-            if device_data is not None:
-                all_data[device_id] = device_data
-        return all_data
+        try:
+            response = self._send_request("get_all_devices")
+            
+            if not response or "error" in response:
+                return {}
+            
+            all_data = {}
+            for device_id, device_info in response.items():
+                if device_info:
+                    acceleration = np.array(device_info['acceleration'])
+                    rotation_matrix = np.array(device_info['rotation_matrix'])
+                    gyroscope = np.array(device_info['gyroscope']) if device_info['gyroscope'] else None
+                    
+                    all_data[device_id] = CalibratedIMUData(
+                        timestamp=device_info['timestamp'],
+                        device_name=device_info['device_name'],
+                        frequency=device_info['frequency'],
+                        acceleration=acceleration,
+                        rotation_matrix=rotation_matrix,
+                        gyroscope=gyroscope,
+                        is_calibrated=device_info['is_calibrated']
+                    )
+            
+            return all_data
+            
+        except Exception as e:
+            print(f"Error getting all device data: {e}")
+            return {}
     
     def get_active_devices(self) -> List[str]:
         """
@@ -115,14 +142,17 @@ class IMUDataAPI:
         Returns:
             List of active device identifiers
         """
-        active_devices = []
-        current_time = time.time()
-        
-        for device_id, device_data in self.receiver.visualizer.device_data.items():
-            if current_time - device_data['last_update'] < 2.0:
-                active_devices.append(device_id)
+        try:
+            response = self._send_request("get_active_devices")
+            
+            if response and isinstance(response, list):
+                return response
+            else:
+                return []
                 
-        return active_devices
+        except Exception as e:
+            print(f"Error getting active devices: {e}")
+            return []
     
     def get_calibrated_devices(self) -> List[str]:
         """
@@ -131,7 +161,8 @@ class IMUDataAPI:
         Returns:
             List of calibrated device identifiers
         """
-        return list(self.receiver.calibrator.reference_quaternions.keys())
+        all_devices = self.get_all_device_data()
+        return [device_id for device_id, data in all_devices.items() if data.is_calibrated]
     
     def is_device_calibrated(self, device_id: str) -> bool:
         """
@@ -143,7 +174,8 @@ class IMUDataAPI:
         Returns:
             True if device is calibrated, False otherwise
         """
-        return device_id in self.receiver.calibrator.reference_quaternions
+        device_data = self.get_device_data(device_id)
+        return device_data is not None and device_data.is_calibrated
     
     def get_device_frequencies(self) -> Dict[str, float]:
         """
@@ -152,12 +184,8 @@ class IMUDataAPI:
         Returns:
             Dictionary mapping device_id to frequency in Hz
         """
-        frequencies = {}
-        for device_id in self.get_active_devices():
-            device_data = self.receiver.visualizer.device_data.get(device_id)
-            if device_data:
-                frequencies[device_id] = device_data.get('frequency', 0.0)
-        return frequencies
+        all_devices = self.get_all_device_data()
+        return {device_id: data.frequency for device_id, data in all_devices.items()}
     
     def get_mobileposer_format(self, device_id: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """
@@ -185,7 +213,7 @@ class IMUDataAPI:
             Dictionary mapping device_id to (acceleration, rotation_matrix) tuples
         """
         mobileposer_data = {}
-        for device_id in self.receiver.device_order:
+        for device_id in ['phone', 'watch', 'headphone', 'glasses']:
             data = self.get_mobileposer_format(device_id)
             if data is not None:
                 mobileposer_data[device_id] = data
@@ -204,35 +232,41 @@ class IMUDataAPI:
         data = self.get_device_data(device_id)
         return data is not None and data.gyroscope is not None
     
-    def export_snapshot(self) -> Dict:
-        """
-        Export current data snapshot for logging/debugging
-        
-        Returns:
-            Complete data snapshot
-        """
-        return {
-            'timestamp': time.time(),
-            'active_devices': self.get_active_devices(),
-            'calibrated_devices': self.get_calibrated_devices(),
-            'device_frequencies': self.get_device_frequencies(),
-            'all_device_data': {
-                device_id: {
-                    'timestamp': data.timestamp,
-                    'frequency': data.frequency,
-                    'acceleration': data.acceleration.tolist(),
-                    'rotation_matrix': data.rotation_matrix.tolist(),
-                    'has_gyroscope': data.gyroscope is not None,
-                    'gyroscope': data.gyroscope.tolist() if data.gyroscope is not None else None,
-                    'is_calibrated': data.is_calibrated
-                }
-                for device_id, data in self.get_all_device_data().items()
-            }
-        }
+    def close(self):
+        """Close the socket connection"""
+        if self.socket:
+            self.socket.close()
+            self.socket = None
+
+
+# Convenience function for quick access
+def get_imu_api(api_port=9001):
+    """
+    Convenience function to get IMU API instance
+    
+    Args:
+        api_port: Port number for API server (default 9001)
+    
+    Returns:
+        IMUDataAPI instance connected to running receiver
+    """
+    return IMUDataAPI(api_port)
 
 
 # Usage Examples:
 """
+# In your demo code:
+from imu_data_api import get_imu_api
+
+# Get API (automatically connects to running receiver)
+api = get_imu_api()
+
+# Get specific device data
+glasses_data = api.get_device_data('glasses')
+if glasses_data and glasses_data.is_calibrated:
+    print(f"Glasses: {glasses_data.frequency:.1f} Hz")
+    print(f"Acceleration: {glasses_data.acceleration}")
+    print(f"Rotation matrix: {glasses_data.rotation_matrix.shape}")
 
 # Get all devices
 all_devices = api.get_all_device_data()
@@ -244,8 +278,6 @@ mobileposer_data = api.get_all_mobileposer_format()
 for device_id, (acc, rot) in mobileposer_data.items():
     print(f"{device_id}: acc={acc.shape}, rot={rot.shape}")
 
-# Check which devices have gyroscope
-for device_id in api.get_active_devices():
-    has_gyro = api.has_gyroscope_data(device_id)
-    print(f"{device_id} has gyroscope: {has_gyro}")
+# Close connection when done
+api.close()
 """

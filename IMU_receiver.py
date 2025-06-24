@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Fixed IMU_receiver.py - Enhanced for Rokid AR Glasses
+IMU_receiver.py 
 
-Key fixes:
+Key features:
 - Proper coordinate system handling for Rokid vs Apple devices
 - Fixed quaternion calibration logic
-- Updated data parsing for Unity's new 11-value format
 - Corrected 3D visualization for glasses orientation
 """
 
@@ -21,7 +20,6 @@ from scipy.spatial.transform import Rotation as R
 
 # Import our refactored visualization module
 from UI.main_visualizer import IMUVisualizer
-from imu_data_api import IMUDataAPI
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -134,12 +132,18 @@ class MobilePoseCalibrator:
             logger.warning("No active devices to calibrate")
 
 class IMUReceiver:
-    """IMU receiver with fixed Rokid glasses support"""
+    """Core IMU receiver with clean separation of concerns"""
     
-    def __init__(self, port=8001):
+    # Class variable to store the instance for external access
+    _instance = None
+    
+    def __init__(self, port=8001, api_port=9001):
         self.port = port
+        self.api_port = api_port
         self.socket = None
+        self.api_socket = None
         self.running = False
+        self.api_running = False
         self.data_queue = queue.Queue()
         
         # Core components
@@ -154,18 +158,17 @@ class IMUReceiver:
         self.next_device_assignment = ['phone', 'watch', 'glasses']  # Assignment order
         self.assignment_index = 0
         
-        logger.info(f"Enhanced IMU Receiver initialized on port {port}")
-        self.api = IMUDataAPI(self)
-        logger.info("API available via receiver.api")
-
-    def get_api(self) -> IMUDataAPI:
-        """
-        Get the IMU Data API instance
+        # Store instance for external access
+        IMUReceiver._instance = self
         
-        Returns:
-            IMUDataAPI instance for external access
-        """
-        return self.api
+        logger.info(f"Enhanced IMU Receiver initialized on port {port}")
+        logger.info(f"API server will start on port {api_port}")
+        logger.info("External API available via imu_data_api.py")
+
+    @classmethod
+    def get_instance(cls):
+        """Get the current IMUReceiver instance for external access"""
+        return cls._instance
     
     def start_server(self):
         """Start UDP server"""
@@ -185,8 +188,117 @@ class IMUReceiver:
             receiver_thread.daemon = True
             receiver_thread.start()
             
+            # Start API server thread
+            api_thread = threading.Thread(target=self._start_api_server)
+            api_thread.daemon = True
+            api_thread.start()
+            
         except Exception as e:
             logger.error(f"Failed to start server: {e}")
+    
+    def _start_api_server(self):
+        """Start API server for external demo access"""
+        try:
+            self.api_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.api_socket.bind(('127.0.0.1', self.api_port))
+            self.api_socket.settimeout(0.1)
+            self.api_running = True
+            
+            logger.info(f"API server started on port {self.api_port}")
+            
+            while self.api_running:
+                try:
+                    data, addr = self.api_socket.recvfrom(1024)
+                    request = data.decode('utf-8')
+                    response = self._handle_api_request(request)
+                    self.api_socket.sendto(response.encode('utf-8'), addr)
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.api_running:
+                        logger.error(f"API server error: {e}")
+        except Exception as e:
+            logger.error(f"Failed to start API server: {e}")
+    
+    def _handle_api_request(self, request):
+        """Handle API requests and return JSON responses"""
+        import json
+        
+        try:
+            if request == "get_all_devices":
+                devices = {}
+                for device_id in ['phone', 'watch', 'headphone', 'glasses']:
+                    device_data = self._get_device_data_internal(device_id)
+                    if device_data:
+                        devices[device_id] = device_data
+                return json.dumps(devices)
+                
+            elif request.startswith("get_device:"):
+                device_id = request.split(":", 1)[1]
+                device_data = self._get_device_data_internal(device_id)
+                return json.dumps(device_data) if device_data else json.dumps(None)
+                
+            elif request == "get_active_devices":
+                active = []
+                current_time = time.time()
+                for device_id, device_data in self.visualizer.device_data.items():
+                    if current_time - device_data['last_update'] < 2.0:
+                        active.append(device_id)
+                return json.dumps(active)
+                
+            elif request == "ping":
+                return json.dumps({"status": "ok", "timestamp": time.time()})
+                
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+        
+        return json.dumps({"error": "Unknown request"})
+    
+    def _get_device_data_internal(self, device_id):
+        """Internal method to get device data for API"""
+        if device_id not in self.current_orientations:
+            return None
+            
+        device_data = self.visualizer.device_data.get(device_id)
+        if not device_data:
+            return None
+            
+        current_time = time.time()
+        if current_time - device_data['last_update'] > 2.0:
+            return None
+            
+        # Get calibrated data
+        raw_quaternion = self.current_orientations[device_id]
+        calibrated_quat = self.calibrator.get_relative_orientation(device_id, raw_quaternion)
+        
+        try:
+            rotation_matrix = R.from_quat(calibrated_quat).as_matrix()
+        except:
+            rotation_matrix = np.eye(3)
+            
+        acceleration_history = device_data.get('accel_history', [])
+        if len(acceleration_history) == 0:
+            return None
+            
+        latest_acceleration = list(acceleration_history[-1])
+        
+        # Get gyroscope if available
+        gyroscope = None
+        gyro_history = device_data.get('gyro_history', [])
+        if len(gyro_history) > 0:
+            latest_gyro = list(gyro_history[-1])
+            if sum(abs(x) for x in latest_gyro) > 0.001:
+                gyroscope = latest_gyro
+        
+        return {
+            'timestamp': device_data['last_update'],
+            'device_name': device_id,
+            'frequency': device_data.get('frequency', 0.0),
+            'acceleration': latest_acceleration,
+            'rotation_matrix': rotation_matrix.tolist(),
+            'gyroscope': gyroscope,
+            'is_calibrated': device_id in self.calibrator.reference_quaternions
+        }
     
     def _receive_loop(self):
         """Receive and parse UDP data"""
@@ -298,22 +410,6 @@ class IMUReceiver:
             )
             
             self.data_queue.put(imu_data)
-            
-            # Optional: Log gravity removal info periodically
-            if hasattr(self, '_gravity_log_counter'):
-                self._gravity_log_counter += 1
-            else:
-                self._gravity_log_counter = 0
-                
-            if self._gravity_log_counter % 300 == 0:  # Every ~5 seconds at 60Hz
-                gravity_enabled = self.visualizer.get_gravity_enabled()
-                if gravity_enabled:
-                    gravity_magnitude = np.linalg.norm(gravity_device_frame)
-                    linear_magnitude = np.linalg.norm(linear_accel)
-                    # logger.info(f"Glasses gravity removal - Gravity mag: {gravity_magnitude:.2f}, Linear acc mag: {linear_magnitude:.2f}")
-                else:
-                    raw_magnitude = np.linalg.norm(raw_accel)
-                    # logger.info(f"Glasses raw acceleration - Magnitude: {raw_magnitude:.2f}")
                 
         except (ValueError, IndexError) as e:
             logger.warning(f"Rokid Glasses data parse error: {e} - Data: {message}")
@@ -484,13 +580,6 @@ class IMUReceiver:
             
             # Update visualization
             self.visualizer.update_device_data(processed_data, is_calibrated)
-            
-            # Log interesting data for debugging (optional)
-            if imu_data.device_id == 'glasses' and imu_data.euler is not None:
-                nod, tilt, turn = imu_data.euler
-                # Only log if significant movement (optional - can be removed)
-                if abs(nod) > 15 or abs(tilt) > 15 or abs(turn) > 30:
-                    logger.debug(f"Glasses large movement - NOD:{nod:.1f}° TILT:{tilt:.1f}° TURN:{turn:.1f}°")
     
     def run(self):
         """Main application loop"""
@@ -517,8 +606,11 @@ class IMUReceiver:
         
         finally:
             self.running = False
+            self.api_running = False
             if self.socket:
                 self.socket.close()
+            if self.api_socket:
+                self.api_socket.close()
             self.visualizer.cleanup()
 
 def main():
@@ -526,6 +618,8 @@ def main():
     print("Coordinate Systems:")
     print("  Apple devices: Z toward user (standard)")
     print("  Rokid glasses: Z away from user (mirrored)")
+    print()
+    print("External API: Use imu_data_api.py for accessing data")
     
     receiver = IMUReceiver(port=8001)
     receiver.run()
