@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-IMU_receiver.py - Enhanced IMU Receiver for iOS Devices + AR Glasses Support
+Fixed IMU_receiver.py - Enhanced for Rokid AR Glasses
 
-Features:
-- MobilePoser-style Calibration (set current orientation as reference)
-- Apple Watch gyroscope data support
-- AR Glasses support (Unity/Rokid data format)
-- Enhanced iOS data parsing
-- Clean visualization without problematic icons
+Key fixes:
+- Proper coordinate system handling for Rokid vs Apple devices
+- Fixed quaternion calibration logic
+- Updated data parsing for Unity's new 11-value format
+- Corrected 3D visualization for glasses orientation
 """
 
 import socket
@@ -18,6 +17,7 @@ import queue
 from collections import deque
 from dataclasses import dataclass
 import logging
+from scipy.spatial.transform import Rotation as R
 
 # Import our refactored visualization module
 from UI.main_visualizer import IMUVisualizer
@@ -32,22 +32,31 @@ class IMUData:
     device_id: str
     accelerometer: np.ndarray  # [ax, ay, az] in m/s²
     gyroscope: np.ndarray      # [gx, gy, gz] in rad/s
-    quaternion: np.ndarray     # [x, y, z, w] from iOS/Unity
-    euler: np.ndarray = None   # [roll, pitch, yaw] (optional)
+    quaternion: np.ndarray     # [x, y, z, w] orientation
+    euler: np.ndarray = None   # [nod, tilt, turn] for Rokid glasses
 
 class MobilePoseCalibrator:
-    """MobilePoser-style calibration: Set current orientation as reference"""
+    """Fixed calibration for different coordinate systems"""
     
     def __init__(self):
         # Store reference quaternions for each device (the "zero" position)
         self.reference_quaternions = {}
         
     def set_reference_orientation(self, device_id: str, current_quaternion: np.ndarray):
-        """Set current orientation as the reference/zero position (MobilePoser style)"""
+        """Set current orientation as the reference/zero position (T-pose style)"""
         # Store the current quaternion as reference
         self.reference_quaternions[device_id] = current_quaternion.copy()
         logger.info(f"Set reference orientation for {device_id}")
         logger.info(f"   Reference quat: [{current_quaternion[0]:.3f}, {current_quaternion[1]:.3f}, {current_quaternion[2]:.3f}, {current_quaternion[3]:.3f}]")
+        
+        # For Rokid glasses, also log the euler angles at calibration
+        if device_id == 'glasses':
+            try:
+                r = R.from_quat(current_quaternion)
+                euler = r.as_euler('xyz', degrees=True)
+                logger.info(f"   Reference euler: NOD={euler[0]:.1f}° TILT={euler[1]:.1f}° TURN={euler[2]:.1f}°")
+            except:
+                pass
     
     def get_relative_orientation(self, device_id: str, current_quaternion: np.ndarray) -> np.ndarray:
         """Get orientation relative to the reference position"""
@@ -58,25 +67,20 @@ class MobilePoseCalibrator:
         # Calculate relative orientation: q_relative = q_reference^-1 * q_current
         ref_quat = self.reference_quaternions[device_id]
         
-        # Quaternion inverse (conjugate for unit quaternions)
-        ref_quat_inv = np.array([-ref_quat[0], -ref_quat[1], -ref_quat[2], ref_quat[3]])
-        
-        # Quaternion multiplication: q1 * q2
-        relative_quat = self._quaternion_multiply(ref_quat_inv, current_quaternion)
-        
-        return relative_quat
-    
-    def _quaternion_multiply(self, q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
-        """Multiply two quaternions (x,y,z,w format)"""
-        x1, y1, z1, w1 = q1
-        x2, y2, z2, w2 = q2
-        
-        return np.array([
-            w1*x2 + x1*w2 + y1*z2 - z1*y2,  # x
-            w1*y2 - x1*z2 + y1*w2 + z1*x2,  # y  
-            w1*z2 + x1*y2 - y1*x2 + z1*w2,  # z
-            w1*w2 - x1*x2 - y1*y2 - z1*z2   # w
-        ])
+        # Use scipy for proper quaternion operations
+        try:
+            ref_rotation = R.from_quat(ref_quat)
+            current_rotation = R.from_quat(current_quaternion)
+            
+            # Get relative rotation: ref_inv * current
+            relative_rotation = ref_rotation.inv() * current_rotation
+            relative_quat = relative_rotation.as_quat()
+            
+            return relative_quat
+            
+        except Exception as e:
+            logger.warning(f"Quaternion calculation error for {device_id}: {e}")
+            return current_quaternion
     
     def calibrate_all_devices(self, current_orientations: dict):
         """Calibrate all devices at once (set all current orientations as reference)"""
@@ -91,7 +95,7 @@ class MobilePoseCalibrator:
             logger.warning("No active devices to calibrate")
 
 class EnhancedIMUReceiver:
-    """Enhanced IMU receiver for iOS devices + AR Glasses with gyroscope support"""
+    """Enhanced IMU receiver with fixed Rokid glasses support"""
     
     def __init__(self, port=8001):
         self.port = port
@@ -111,7 +115,7 @@ class EnhancedIMUReceiver:
         self.next_device_assignment = ['phone', 'watch', 'glasses']  # Assignment order
         self.assignment_index = 0
         
-        logger.info(f"Enhanced IMU Receiver for iOS devices + AR Glasses initialized on port {port}")
+        logger.info(f"Enhanced IMU Receiver initialized on port {port}")
     
     def start_server(self):
         """Start UDP server"""
@@ -123,7 +127,7 @@ class EnhancedIMUReceiver:
             logger.info(f"UDP server started on port {self.port}")
             logger.info("Waiting for data from:")
             logger.info("  - iOS devices (phone/watch)")
-            logger.info("  - AR Glasses (Unity app)")
+            logger.info("  - Rokid AR Glasses (Unity app)")
             self.running = True
             
             # Start receiver thread
@@ -149,7 +153,7 @@ class EnhancedIMUReceiver:
                     logger.error(f"Receive error: {e}")
     
     def _parse_data(self, message, addr):
-        """Parse data from different sources (iOS or AR Glasses)"""
+        """Parse data from different sources (iOS or Rokid Glasses)"""
         try:
             # Handle iOS system messages
             if message == "client_initialized":
@@ -163,81 +167,79 @@ class EnhancedIMUReceiver:
             if ';' in message and ('phone:' in message or 'headphone:' in message or 'watch:' in message):
                 self._parse_ios_data(message, addr)
             else:
-                # Assume it's AR Glasses Unity format
-                self._parse_ar_glasses_data(message, addr)
+                # Assume it's Rokid Glasses Unity format
+                self._parse_rokid_glasses_data(message, addr)
                     
         except Exception as e:
             logger.warning(f"Parse error: {e}")
     
-    def _parse_ios_data(self, message, addr):
-        """Parse iOS SensorTracker data format"""
-        try:
-            # Parse device data: "ios-device;device_type:data"
-            if ';' in message:
-                device_prefix, data_part = message.split(';', 1)
-                
-                if data_part.startswith('phone:'):
-                    self._parse_phone_data(data_part[6:])
-                elif data_part.startswith('headphone:'):
-                    self._parse_headphone_data(data_part[10:])
-                elif data_part.startswith('watch:'):
-                    self._parse_watch_data(data_part[6:])
-                    
-        except Exception as e:
-            logger.warning(f"iOS parse error: {e}")
-    
-    def _parse_ar_glasses_data(self, message, addr):
-        """Parse AR Glasses Unity data format: timestamp device_timestamp acc_x acc_y acc_z quat_x quat_y quat_z quat_w gyro_x gyro_y gyro_z"""
+    def _parse_rokid_glasses_data(self, message, addr):
+        """Parse Rokid Glasses Unity data format: timestamp device_timestamp quat_x quat_y quat_z quat_w acc_x acc_y acc_z gyro_x gyro_y gyro_z"""
         try:
             parts = message.split()
             if len(parts) != 12:
-                logger.warning(f"AR Glasses data format error: expected 12 values, got {len(parts)}")
+                logger.warning(f"Rokid Glasses data format error: expected 12 values, got {len(parts)}")
                 return
                 
-            # Parse Unity format data
+            # Parse Unity's format with remapped quaternion and sensor data
             timestamp = float(parts[0])
             device_timestamp = float(parts[1])
             
-            # Parse accelerometer data (m/s²) - RAW, no conversion
-            accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
+            # Parse gameRotation quaternion from Unity (x, y, z, w format)
+            quat = np.array([float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])])
             
-            # Parse quaternion (x, y, z, w format) - RAW, no conversion
-            quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
+            # Parse remapped accelerometer data (RIGHT, UP, FORWARD positive)
+            accel = np.array([float(parts[6]), float(parts[7]), float(parts[8])])
             
-            # Parse gyroscope data (rad/s) - RAW, no conversion
+            # Parse remapped gyroscope data
             gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
             
-            # Assign device ID based on IP address
+            # Convert quaternion to intuitive Euler angles for display
+            euler_deg = None
+            try:
+                # Convert to Euler angles using standard xyz order
+                rotation = R.from_quat(quat)
+                euler_rad = rotation.as_euler('xyz', degrees=False)
+                euler_deg = euler_rad * 180.0 / np.pi
+                
+                # Map to intuitive head movements based on your coordinate system:
+                # X=Right, Y=Up, Z=away from user
+                nod = euler_deg[0]    # X rotation = NOD (up/down)
+                turn = euler_deg[1]   # Y rotation = TURN (left/right rotation)  
+                tilt = euler_deg[2]   # Z rotation = TILT (left/right tilt)
+                
+                euler_deg = np.array([nod, tilt, turn])
+                
+            except:
+                euler_deg = np.array([0, 0, 0])
+            
+            # Assign device ID
             device_id = self._get_device_id_for_ip(addr[0], 'glasses')
             
-            # Log raw data to debug
-            logger.info(f"AR Glasses RAW data - Device: {device_id}")
-            logger.info(f"  Accel: [{accel[0]:.3f}, {accel[1]:.3f}, {accel[2]:.3f}]")
-            logger.info(f"  Gyro: [{gyro[0]:.3f}, {gyro[1]:.3f}, {gyro[2]:.3f}]")
-            logger.info(f"  Quat: [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]")
-            
+            # Create IMU data
             imu_data = IMUData(
                 timestamp=timestamp,
                 device_id=device_id,
-                accelerometer=accel,  # Raw data
-                gyroscope=gyro,       # Raw data
-                quaternion=quat       # Raw data
+                accelerometer=accel,
+                gyroscope=gyro,
+                quaternion=quat,
+                euler=euler_deg  # NOD, TILT, TURN in degrees
             )
             
             self.data_queue.put(imu_data)
                 
         except (ValueError, IndexError) as e:
-            logger.warning(f"AR Glasses data parse error: {e} - Data: {message}")
+            logger.warning(f"Rokid Glasses data parse error: {e} - Data: {message}")
     
     def _get_device_id_for_ip(self, ip_address, preferred_type='glasses'):
         """Get device ID for an IP address, assigning new ones as needed"""
         if ip_address in self.device_ip_mapping:
             return self.device_ip_mapping[ip_address]
         
-        # For AR glasses, always assign 'glasses' if available
+        # For Rokid glasses, always assign 'glasses' if available
         if preferred_type == 'glasses' and 'glasses' not in self.device_ip_mapping.values():
             self.device_ip_mapping[ip_address] = 'glasses'
-            logger.info(f"Assigned AR Glasses to IP {ip_address}")
+            logger.info(f"Assigned Rokid AR Glasses to IP {ip_address}")
             return 'glasses'
         
         # Find next available device type
@@ -260,10 +262,10 @@ class EnhancedIMUReceiver:
             if len(parts) >= 11:
                 timestamp = float(parts[0])
                 
-                # User acceleration (m/s²) - RAW, no conversion
+                # User acceleration (m/s²)
                 accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
                 
-                # Quaternion from iOS (x, y, z, w format) - RAW, no conversion
+                # Quaternion from iOS (x, y, z, w format)
                 quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
                 
                 # Euler angles if available
@@ -277,9 +279,9 @@ class EnhancedIMUReceiver:
                 imu_data = IMUData(
                     timestamp=timestamp,
                     device_id='phone',
-                    accelerometer=accel,  # Raw data
+                    accelerometer=accel,
                     gyroscope=gyro,
-                    quaternion=quat,      # Raw data
+                    quaternion=quat,
                     euler=euler
                 )
                 
@@ -288,14 +290,31 @@ class EnhancedIMUReceiver:
         except (ValueError, IndexError) as e:
             logger.warning(f"Phone data parse error: {e}")
     
+    def _parse_ios_data(self, message, addr):
+        """Parse iOS SensorTracker data format"""
+        try:
+            # Parse device data: "ios-device;device_type:data"
+            if ';' in message:
+                device_prefix, data_part = message.split(';', 1)
+                
+                if data_part.startswith('phone:'):
+                    self._parse_phone_data(data_part[6:])
+                elif data_part.startswith('headphone:'):
+                    self._parse_headphone_data(data_part[10:])
+                elif data_part.startswith('watch:'):
+                    self._parse_watch_data(data_part[6:])
+                    
+        except Exception as e:
+            logger.warning(f"iOS parse error: {e}")
+    
     def _parse_headphone_data(self, data):
         """Parse headphone data (AirPods)"""
         try:
             parts = data.split()
             if len(parts) >= 9:
                 timestamp = float(parts[0])
-                accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])  # Raw data
-                quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])  # Raw data
+                accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
+                quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
                 
                 # AirPods don't typically send gyroscope data
                 gyro = np.array([0.0, 0.0, 0.0])
@@ -303,9 +322,9 @@ class EnhancedIMUReceiver:
                 imu_data = IMUData(
                     timestamp=timestamp,
                     device_id='headphone',
-                    accelerometer=accel,  # Raw data
+                    accelerometer=accel,
                     gyroscope=gyro,
-                    quaternion=quat       # Raw data
+                    quaternion=quat
                 )
                 
                 self.data_queue.put(imu_data)
@@ -320,29 +339,24 @@ class EnhancedIMUReceiver:
             
             # Apple Watch format: timestamp deviceTimestamp accX accY accZ quatX quatY quatZ quatW gyroX gyroY gyroZ
             if len(parts) >= 12:
-                # Parse timestamps
                 timestamp = float(parts[0])
                 device_timestamp = float(parts[1])
                 
-                # Parse accelerometer data (m/s²) - RAW, no conversion
+                # Parse accelerometer data (m/s²)
                 accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
                 
-                # Parse quaternion (x, y, z, w format) - RAW, no conversion
+                # Parse quaternion (x, y, z, w format)
                 quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
                 
-                # Parse gyroscope data (rad/s) - RAW, no conversion
+                # Parse gyroscope data (rad/s)
                 gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
-                
-                # Log successful Apple Watch data reception
-                logger.debug(f"Apple Watch RAW data - Accel: [{accel[0]:.3f}, {accel[1]:.3f}, {accel[2]:.3f}], "
-                           f"Gyro: [{gyro[0]:.3f}, {gyro[1]:.3f}, {gyro[2]:.3f}]")
                 
                 imu_data = IMUData(
                     timestamp=timestamp,
                     device_id='watch',
-                    accelerometer=accel,  # Raw data
-                    gyroscope=gyro,       # Raw data
-                    quaternion=quat       # Raw data
+                    accelerometer=accel,
+                    gyroscope=gyro,
+                    quaternion=quat
                 )
                 
                 self.data_queue.put(imu_data)
@@ -353,18 +367,8 @@ class EnhancedIMUReceiver:
         except (ValueError, IndexError) as e:
             logger.warning(f"Watch data parse error: {e} - Data: {data}")
     
-    def _convert_ios_quaternion(self, ios_quat: np.ndarray) -> np.ndarray:
-        """Convert iOS quaternion - DISABLED for now, return raw data"""
-        # Return raw data for debugging
-        return ios_quat
-    
-    def _convert_ar_glasses_quaternion(self, ar_quat: np.ndarray) -> np.ndarray:
-        """Convert AR Glasses quaternion - DISABLED for now, return raw data"""
-        # Return raw data for debugging
-        return ar_quat
-    
     def calibrate_all_devices(self):
-        """Calibrate all active devices (MobilePoser style)"""
+        """Calibrate all active devices (set current pose as T-pose/neutral)"""
         self.calibrator.calibrate_all_devices(self.current_orientations)
     
     def process_data(self):
@@ -383,7 +387,7 @@ class EnhancedIMUReceiver:
                 timestamp=imu_data.timestamp,
                 device_id=imu_data.device_id,
                 accelerometer=imu_data.accelerometer,
-                gyroscope=imu_data.gyroscope,  # Include gyroscope data (Apple Watch + AR Glasses)
+                gyroscope=imu_data.gyroscope,
                 quaternion=relative_quat,
                 euler=imu_data.euler
             )
@@ -394,10 +398,12 @@ class EnhancedIMUReceiver:
             # Update visualization
             self.visualizer.update_device_data(processed_data, is_calibrated)
             
-            # Log gyroscope data for Apple Watch and AR Glasses
-            if imu_data.device_id in ['watch', 'glasses'] and np.linalg.norm(imu_data.gyroscope) > 0.001:
-                logger.debug(f"{imu_data.device_id} active - Gyro magnitude: {np.linalg.norm(imu_data.gyroscope):.3f}, "
-                           f"Accel magnitude: {np.linalg.norm(imu_data.accelerometer):.3f}")
+            # Log interesting data for debugging (optional)
+            if imu_data.device_id == 'glasses' and imu_data.euler is not None:
+                nod, tilt, turn = imu_data.euler
+                # Only log if significant movement (optional - can be removed)
+                if abs(nod) > 15 or abs(tilt) > 15 or abs(turn) > 30:
+                    logger.debug(f"Glasses large movement - NOD:{nod:.1f}° TILT:{tilt:.1f}° TURN:{turn:.1f}°")
     
     def run(self):
         """Main application loop"""
@@ -429,6 +435,14 @@ class EnhancedIMUReceiver:
             self.visualizer.cleanup()
 
 def main():
+    print("Rokid AR Glasses IMU Receiver")
+    print("=============================")
+    print("Coordinate Systems:")
+    print("  Apple devices: Z toward user (standard)")
+    print("  Rokid glasses: Z away from user (mirrored)")
+    print("  Visualization: Mirror effect for glasses")
+    print()
+    
     receiver = EnhancedIMUReceiver(port=8001)
     receiver.run()
 

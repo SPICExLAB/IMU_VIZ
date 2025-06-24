@@ -90,6 +90,7 @@ class IMUVisualizer:
                 'accel_history': deque(maxlen=self.waveform_history),
                 'gyro_history': deque(maxlen=self.waveform_history),
                 'quaternion': np.array([0, 0, 0, 1]),
+                'euler': None,
                 'last_update': 0,
                 'sample_count': 0,
                 'is_calibrated': False,
@@ -104,6 +105,7 @@ class IMUVisualizer:
         data['accel_history'].append(imu_data.accelerometer)
         data['gyro_history'].append(imu_data.gyroscope)
         data['quaternion'] = imu_data.quaternion
+        data['euler'] = imu_data.euler  # Store Euler angles for glasses
         data['last_update'] = time.time()
         data['sample_count'] += 1
         data['is_calibrated'] = is_calibrated
