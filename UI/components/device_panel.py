@@ -242,13 +242,13 @@ class DevicePanel:
         color = Colors.WAITING
         
         # Top and bottom edges
-        for i in range(0, w, dash_length + gap_length):
+        for i in range(0, int(w), dash_length + gap_length):
             end = min(i + dash_length, w)
             pygame.draw.line(self.screen, color, (x + i, y), (x + end, y), 2)
             pygame.draw.line(self.screen, color, (x + i, y + h), (x + end, y + h), 2)
         
         # Left and right edges
-        for i in range(0, h, dash_length + gap_length):
+        for i in range(0, int(h), dash_length + gap_length):
             end = min(i + dash_length, h)
             pygame.draw.line(self.screen, color, (x, y + i), (x, y + end), 2)
             pygame.draw.line(self.screen, color, (x + w, y + i), (x + w, y + end), 2)
