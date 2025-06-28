@@ -1,4 +1,4 @@
-"""3D rendering utilities for device visualization with AR Glasses support"""
+"""3D rendering utilities with consistent coordinate systems"""
 
 import numpy as np
 import pygame
@@ -6,14 +6,14 @@ import math
 from scipy.spatial.transform import Rotation as R
 
 class Renderer3D:
-    """Handles 3D rendering operations including AR Glasses"""
+    """Handles 3D rendering operations with consistent coordinate handling"""
     
     # Device 3D scales (for different shapes)
     DEVICE_SCALES = {
         'phone': (0.4, 1.0, 0.08),      # iPhone: thin rectangle
         'headphone': (0.6, 0.6, 0.6),   # AirPods: smaller cube
         'watch': (0.8, 0.8, 0.3),       # Watch: square with depth
-        'glasses': (1.5, 0.5, 0.1)      # AR Glasses: x:y:z = 5:2:0.5 ratio, wide horizontal
+        'glasses': (1.5, 0.5, 0.1)      # AR Glasses: wide horizontal
     }
     
     def __init__(self, screen):
@@ -35,8 +35,7 @@ class Renderer3D:
         
         # Special handling for glasses to create a proper glasses shape
         if device_type == 'glasses':
-            # Create AR glasses shape with correct proportions: x:y:z = 5:2:1
-            # X = width (left-right), Y = height (up-down), Z = depth (forward-back)
+            # Create AR glasses shape with correct proportions
             vertices = np.array([
                 # Bottom face (glasses frame bottom)
                 [-scale_x, -scale_y, -scale_z],    # 0: left-bottom-back
@@ -108,7 +107,6 @@ class Renderer3D:
         
         # Arrowhead size
         arrow_size = 8
-        arrow_angle = 0.6  # radians
         
         # Calculate arrowhead points
         arrow_back = np.array([
@@ -125,27 +123,53 @@ class Renderer3D:
         pygame.draw.line(self.screen, color, end_point, tuple(arrow_right.astype(int)), 3)
     
     def draw_3d_axes(self, center: tuple, quaternion: np.ndarray, axis_length: float = 40, 
-                 axis_colors=None, font_manager=None, device_type='phone'):
-        """Draw 3D coordinate axes with device-specific coordinate systems"""
+                     axis_colors=None, font_manager=None, device_type='phone'):
+        """
+        Draw 3D coordinate axes with consistent device-specific coordinate systems
+        
+        Screen coordinate convention:
+        - Positive Z: Away from viewer (into screen)
+        - Negative Z: Toward viewer (out of screen)
+        """
         # Use provided colors or defaults
         if axis_colors is None:
             axis_colors = [(255, 60, 60), (60, 255, 60), (60, 60, 255)]  # R, G, B
         
         # Device-specific coordinate system directions
-        if device_type == 'glasses':
-            # Rokid glasses: Z is BACKWARD (away from user)
+        if device_type == 'global':
+            # Global frame (X:left, Y:up, Z:forward)
+            # Forward means away from viewer (into screen)
             axes_directions = np.array([
-                [1, 0, 0],   # X-axis (Red) - Right
-                [0, 1, 0],   # Y-axis (Green) - Up
-                [0, 0, -1]   # Z-axis (Blue) - BACKWARD (away from user) - FLIPPED!
+                [-1, 0, 0],   # X-axis (Red) - Left
+                [0, 1, 0],    # Y-axis (Green) - Up
+                [0, 0, -1]    # Z-axis (Blue) - Forward (into screen, away from viewer)
             ])
-            axis_labels = ['X', 'Y', 'Z*']  # Mark Z as different
-        else:
-            # Apple devices: Standard coordinate system (Z forward)
+            axis_labels = ['X', 'Y', 'Z']
+            
+        elif device_type == 'glasses':
+            # Rokid glasses: Z is FORWARD (into screen, away from viewer)
             axes_directions = np.array([
-                [1, 0, 0],   # X-axis (Red) - Right
-                [0, 1, 0],   # Y-axis (Green) - Up in 3D space
-                [0, 0, 1]    # Z-axis (Blue) - Forward (toward user)
+                [1, 0, 0],    # X-axis (Red) - Right
+                [0, 1, 0],    # Y-axis (Green) - Up
+                [0, 0, -1]    # Z-axis (Blue) - Forward (into screen, away from viewer)
+            ])
+            axis_labels = ['X', 'Y', 'Z']
+            
+        elif device_type == 'headphone':
+            # Headphone: Y is forward, Z is up
+            axes_directions = np.array([
+                [1, 0, 0],    # X-axis (Red) - Right
+                [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
+                [0, -1, 0]    # Z-axis (Blue) - Forward (Y in device frame)
+            ])
+            axis_labels = ['X', 'Y', 'Z']
+            
+        else:
+            # Phone/watch: Standard coordinate system (Z toward user)
+            axes_directions = np.array([
+                [1, 0, 0],    # X-axis (Red) - Right
+                [0, 1, 0],    # Y-axis (Green) - Up in 3D space
+                [0, 0, 1]     # Z-axis (Blue) - Toward user (out of screen, toward viewer)
             ])
             axis_labels = ['X', 'Y', 'Z']
         
@@ -154,8 +178,8 @@ class Renderer3D:
             try:
                 rotation = R.from_quat(quaternion)
                 axes_directions = rotation.apply(axes_directions)
-            except:
-                pass
+            except Exception as e:
+                print(f"Error rotating axes: {e}")
         
         # Draw arrows
         for i, (direction, color, label) in enumerate(zip(axes_directions, axis_colors, axis_labels)):

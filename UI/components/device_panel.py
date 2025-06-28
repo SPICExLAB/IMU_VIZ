@@ -1,4 +1,4 @@
-"""Device panel component for 3D visualization - with gravity toggle for AR glasses"""
+"""Device panel component with enhanced calibration indicators"""
 
 import pygame
 import numpy as np
@@ -8,7 +8,7 @@ from ..utils.fonts import FontManager
 from ..utils.renderer_3d import Renderer3D
 
 class DevicePanel:
-    """Individual device 3D visualization panel - with gravity toggle for glasses"""
+    """Individual device 3D visualization panel with enhanced calibration indicators"""
     
     def __init__(self, screen, device_name, position_info):
         self.screen = screen
@@ -62,7 +62,14 @@ class DevicePanel:
         
         # Draw box background
         pygame.draw.rect(self.screen, Colors.PANEL, (x, y, w, h))
-        pygame.draw.rect(self.screen, Colors.get_device_color(self.device_name), (x, y, w, h), 2)
+        
+        # Draw border with different color based on calibration status
+        border_color = Colors.CALIBRATED if is_calibrated else Colors.get_device_color(self.device_name)
+        pygame.draw.rect(self.screen, border_color, (x, y, w, h), 2)
+        
+        # Draw calibration indicator
+        if is_calibrated:
+            self._draw_calibration_indicator(x, y, w, h)
         
         # Draw gravity toggle button for AR glasses
         if self.device_name == 'glasses':
@@ -78,12 +85,67 @@ class DevicePanel:
         
         device_center = (self.center[0], self.center[1])
         
+        # Draw device coordinate system info
+        if self.device_name == 'phone' or self.device_name == 'watch':
+            frame_text = "X:right, Y:up, Z:backward"
+        elif self.device_name == 'headphone':
+            frame_text = "X:right, Z:up, Y:forward"
+        elif self.device_name == 'glasses':
+            frame_text = "X:right, Y:up, Z:forward"
+        else:
+            frame_text = "Device coordinates"
+            
+        frame_surface = self.font_manager.render_text(frame_text, 'tiny', Colors.TEXT_SECONDARY)
+        frame_rect = frame_surface.get_rect(centerx=self.center[0], y=y + 5)
+        self.screen.blit(frame_surface, frame_rect)
+        
+        # Draw calibration status message
+        if is_calibrated:
+            cal_text = "Showing rotation relative to calibration"
+        else:
+            cal_text = "Showing absolute orientation"
+            
+        cal_surface = self.font_manager.render_text(cal_text, 'tiny', title_color)
+        cal_rect = cal_surface.get_rect(centerx=self.center[0], y=y + 20)
+        self.screen.blit(cal_surface, cal_rect)
+        
+        # Draw the 3D device with its axes
         self._draw_3d_device(device_center, device_data['quaternion'], 
                            Colors.get_device_color(self.device_name), device_size)
         
         # Draw additional info for glasses
         if self.device_name == 'glasses':
             self._draw_glasses_info(device_data, x, y, w, h, gravity_enabled)
+        
+        # Draw calibration prompt if not calibrated
+        if not is_calibrated:
+            self._draw_calibrate_prompt(x, y, w, h)
+    
+    def _draw_calibration_indicator(self, x, y, w, h):
+        """Draw calibration status indicator"""
+        # Draw a small indicator in the corner to show device is calibrated
+        indicator_size = 12
+        indicator_margin = 8
+        
+        # Draw in top-left corner
+        indicator_rect = pygame.Rect(
+            x + indicator_margin, 
+            y + indicator_margin, 
+            indicator_size, 
+            indicator_size
+        )
+        
+        # Draw indicator
+        pygame.draw.rect(self.screen, Colors.CALIBRATED, indicator_rect)
+        pygame.draw.rect(self.screen, Colors.TEXT, indicator_rect, 1)
+        
+        # Draw checkmark
+        checkmark_points = [
+            (x + indicator_margin + 2, y + indicator_margin + 6),
+            (x + indicator_margin + 5, y + indicator_margin + 9),
+            (x + indicator_margin + 10, y + indicator_margin + 3)
+        ]
+        pygame.draw.lines(self.screen, Colors.TEXT, False, checkmark_points, 2)
     
     def _draw_gravity_toggle_button(self, x, y, w, h, gravity_enabled):
         """Draw gravity toggle button in bottom right corner of glasses panel"""
@@ -190,21 +252,15 @@ class DevicePanel:
         self.renderer.draw_3d_axes(center, quaternion, axis_length, 
                                 axis_colors=axis_colors, 
                                 font_manager=self.font_manager,
-                                device_type=self.device_name)  # NEW PARAMETER
+                                device_type=self.device_name)
     
     def _draw_glasses_info(self, device_data, x, y, w, h, gravity_enabled):
         """Draw additional info specific to AR glasses"""
-        # Check if we have Euler angle data
-        coord_note = "AR Glasses: Z is forward"
-        coord_surface = self.font_manager.render_text(coord_note, 'tiny', Colors.GLASSES)
-        coord_rect = coord_surface.get_rect(centerx=x + w//2, y=y + 5)
-        self.screen.blit(coord_surface, coord_rect)
-        
         # Show gravity removal status
         gravity_status = "Gravity: Removed" if gravity_enabled else "Gravity: Included"
         gravity_color = (100, 200, 100) if gravity_enabled else (200, 100, 100)
         gravity_surface = self.font_manager.render_text(gravity_status, 'tiny', gravity_color)
-        gravity_rect = gravity_surface.get_rect(centerx=x + w//2, y=y + 18)
+        gravity_rect = gravity_surface.get_rect(centerx=x + w//2, y=y + 40)
         self.screen.blit(gravity_surface, gravity_rect)
         
         if 'euler' in device_data and device_data['euler'] is not None:
@@ -279,7 +335,7 @@ class DevicePanel:
     
     def _draw_calibrate_prompt(self, x, y, w, h):
         """Draw calibration prompt at bottom of active device box"""
-        button_text = "Press CALIBRATE to set T-pose"
+        button_text = "Press CALIBRATE to set reference orientation"
         button_surface = self.font_manager.render_text(button_text, 'tiny', Colors.UNCALIBRATED)
         button_rect = button_surface.get_rect(centerx=self.center[0], bottom=y + h - 5)
         self.screen.blit(button_surface, button_rect)
