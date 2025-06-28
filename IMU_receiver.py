@@ -363,8 +363,8 @@ class IMUReceiver:
                     rotation = R.from_quat(quat_right_handed)
                     
                     # Define gravity vector in world frame and transform to device frame
-                    gravity_magnitude = np.linalg.norm(raw_accel)
-                    gravity_world = np.array([0, 0, gravity_magnitude])
+                    # gravity_magnitude = np.linalg.norm(raw_accel)
+                    gravity_world = np.array([0, 0, 9,81])
                     gravity_device_frame = rotation.inv().apply(gravity_world)
                     
                     # Remove gravity from raw acceleration
