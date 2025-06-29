@@ -14,7 +14,7 @@ class Renderer3D:
     # Device 3D scales (for different shapes)
     DEVICE_SCALES = {
         'phone': (0.4, 1.0, 0.08),      # iPhone: thin rectangle
-        'headphone': (0.6, 0.6, 0.6),   # AirPods: smaller cube
+        'headphone': (0.25, 0.25, 0.25),   # AirPods: smaller cube
         'watch': (0.8, 0.8, 0.3),       # Watch: square with depth
         'glasses': (1.5, 0.5, 0.1)      # AR Glasses: wide horizontal
     }
@@ -165,29 +165,31 @@ class Renderer3D:
             else:
                 # For actual devices, use their local coordinate systems
                 if device_type == 'phone' or device_type == 'watch':
-                    # IMPORTANT: For calibrated reference devices, show axes in global frame
-                    # This ensures the visualization matches the physical orientation
-                    if is_calibrated and is_reference:
-                        axes_directions = np.array([
-                            [-1, 0, 0],   # X-axis (Red) - Left (was Right)
-                            [0, 1, 0],    # Y-axis (Green) - Up (unchanged)
-                            [0, 0, -1]    # Z-axis (Blue) - Forward (was Toward)
-                        ])
-                        logger.debug(f"Using global-aligned axes for calibrated reference {device_type}")
-                    else:
-                        # Phone/Watch: X-right, Y-up, Z-toward user
-                        axes_directions = np.array([
+                    # Phone/Watch: X-right, Y-up, Z-toward user
+                    axes_directions = np.array([
                             [1, 0, 0],    # X-axis (Red) - Right
                             [0, 1, 0],    # Y-axis (Green) - Up
                             [0, 0, 1]     # Z-axis (Blue) - Toward user
                         ])
+                    # IMPORTANT: For calibrated reference devices, show axes in global frame
+                    # This ensures the visualization matches the physical orientation
+                    if is_calibrated and is_reference:
+                        y_flip = R.from_euler('y', 180, degrees=True)
+                        axes_directions = y_flip.apply(axes_directions)   
+                       
                 elif device_type == 'headphone':
+
                     # Headphone: X-right, Z-up, Y-forward
                     axes_directions = np.array([
                         [1, 0, 0],    # X-axis (Red) - Right
                         [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
-                        [0, 1, 0]     # Z-axis (Blue) - Forward (Y in device frame)
+                        [0, -1, 0]     # Z-axis (Blue) - Forward (Y in device frame)
                     ])
+                    # axes_directions = np.array([
+                    #     [-1, 0, 0],   # X-axis (Red) - Left
+                    #     [0, 1, 0],    # Y-axis (Green) - Up
+                    #     [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
+                    # ])
                 elif device_type == 'glasses':
                     # AR Glasses: X-right, Y-up, Z-forward
                     axes_directions = np.array([

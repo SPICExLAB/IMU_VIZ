@@ -70,7 +70,7 @@ class DevicePanel:
         # Add indicator if selected as reference but not yet calibrated
         if is_selected_as_reference and not is_calibrated:
             title_text += " (REF)"
-            
+                
         # Title above box
         title_color = Colors.CALIBRATED if is_calibrated else Colors.UNCALIBRATED
         if is_selected_as_reference and not is_calibrated:
@@ -94,7 +94,7 @@ class DevicePanel:
             border_color = Colors.REFERENCE if is_reference else Colors.CALIBRATED
         else:
             border_color = Colors.REFERENCE if is_selected_as_reference else Colors.get_device_color(self.device_name)
-            
+                
         border_width = 3 if (is_reference or is_selected_as_reference) else 2  # Thicker border for reference
         pygame.draw.rect(self.screen, border_color, (x, y, w, h), border_width)
         
@@ -118,39 +118,7 @@ class DevicePanel:
         if not is_calibrated and not is_selected_as_reference:
             self._draw_set_reference_button(x, y, w, h)
         
-        # Draw device coordinate system info
-        if self.device_name == 'phone' or self.device_name == 'watch':
-            frame_text = "Screen-based: X:right, Y:up, Z:toward"
-        elif self.device_name == 'headphone':
-            frame_text = "Headphone: X:right, Z:up, Y:forward"
-        elif self.device_name == 'glasses':
-            frame_text = "AR Glasses: X:right, Y:up, Z:forward"
-        else:
-            frame_text = "Device coordinates"
-            
-        frame_surface = self.font_manager.render_text(frame_text, 'tiny', Colors.TEXT_SECONDARY)
-        frame_rect = frame_surface.get_rect(centerx=self.center[0], y=y + 5)
-        self.screen.blit(frame_surface, frame_rect)
-        
-        # Draw calibration status message
-        if is_calibrated:
-            if is_reference:
-                cal_text = "REFERENCE DEVICE - Sets global orientation"
-                cal_color = Colors.REFERENCE
-            else:
-                cal_text = "Showing rotation relative to reference device"
-                cal_color = Colors.CALIBRATED
-        else:
-            if is_selected_as_reference:
-                cal_text = "SELECTED AS REFERENCE - Press CALIBRATE to confirm"
-                cal_color = Colors.REFERENCE
-            else:
-                cal_text = "Showing absolute orientation (uncalibrated)"
-                cal_color = Colors.UNCALIBRATED
-            
-        cal_surface = self.font_manager.render_text(cal_text, 'tiny', cal_color)
-        cal_rect = cal_surface.get_rect(centerx=self.center[0], y=y + 20)
-        self.screen.blit(cal_surface, cal_rect)
+        # REMOVE: No longer drawing coordinate system info text
         
         # Calculate device size based on device type and box size
         if self.device_name == 'glasses':
@@ -164,24 +132,22 @@ class DevicePanel:
         
         # Draw the 3D device with its axes
         self._draw_3d_device(device_center, device_data['quaternion'], 
-                           Colors.get_device_color(self.device_name), device_size)
+                        Colors.get_device_color(self.device_name), device_size)
         
         # Draw additional info for glasses
         if self.device_name == 'glasses':
             self._draw_glasses_info(device_data, x, y, w, h, gravity_enabled)
         
-        # Draw calibration prompt if not calibrated and not selected as reference
-        if not is_calibrated and not is_selected_as_reference:
-            self._draw_calibrate_prompt(x, y, w, h)
+      
     
     def _draw_set_reference_button(self, x, y, w, h):
-        """Draw 'Set as Reference' button for uncalibrated devices"""
-        button_width = 140
+        """Draw 'Reference' button at bottom center of uncalibrated devices"""
+        button_width = 100  # Make button smaller
         button_height = 24
         button_margin = 5
         
-        # Position at bottom of panel
-        button_x = (x + w - button_width) // 2
+        # Position at bottom center of panel
+        button_x = x + (w - button_width) // 2
         button_y = y + h - button_height - button_margin
         
         # Store button rect for click detection
@@ -191,8 +157,8 @@ class DevicePanel:
         pygame.draw.rect(self.screen, Colors.REFERENCE, self.reference_button_rect)
         pygame.draw.rect(self.screen, Colors.TEXT, self.reference_button_rect, 1)
         
-        # Draw text
-        text = self.font_manager.render_text("Set as Reference", 'small', Colors.TEXT)
+        # Draw text - changed to just "Reference"
+        text = self.font_manager.render_text("Reference", 'small', Colors.TEXT)
         text_rect = text.get_rect(center=self.reference_button_rect.center)
         self.screen.blit(text, text_rect)
 
@@ -224,10 +190,6 @@ class DevicePanel:
         ref_rect = ref_text.get_rect(centerx=x + w // 2, y=y + 40)
         self.screen.blit(ref_text, ref_rect)
         
-        # Draw instruction
-        instr_text = self.font_manager.render_text("Press CALIBRATE button to confirm", 'tiny', Colors.TEXT_SECONDARY)
-        instr_rect = instr_text.get_rect(centerx=x + w // 2, y=y + 55)
-        self.screen.blit(instr_text, instr_rect)
         
     def _draw_calibration_indicator(self, x, y, w, h, is_reference):
         """Draw calibration status indicator"""
@@ -398,50 +360,11 @@ class DevicePanel:
         # Use class properties for reference status
         is_reference = self.is_reference
         
-        # Define device-specific coordinate axes in local frame
-        if self.device_name == 'phone' or self.device_name == 'watch':
-            # Always use the device's local coordinate system
-            axes_directions = np.array([
-                [1, 0, 0],    # X-axis (Red) - Right
-                [0, 1, 0],    # Y-axis (Green) - Up
-                [0, 0, 1]     # Z-axis (Blue) - Toward user
-            ])
-        elif self.device_name == 'headphone':
-            # Headphone local coordinates
-            axes_directions = np.array([
-                [1, 0, 0],    # X-axis (Red) - Right
-                [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
-                [0, 1, 0]     # Z-axis (Blue) - Forward (Y in device frame)
-            ])
-        elif self.device_name == 'glasses':
-            # AR Glasses local coordinates
-            axes_directions = np.array([
-                [1, 0, 0],    # X-axis (Red) - Right
-                [0, 1, 0],    # Y-axis (Green) - Up
-                [0, 0, -1]    # Z-axis (Blue) - Forward
-            ])
-        else:
-            # Default local coordinates
-            axes_directions = np.array([
-                [1, 0, 0],    # X-axis (Red) - Right
-                [0, 1, 0],    # Y-axis (Green) - Up
-                [0, 0, 1]     # Z-axis (Blue) - Forward
-            ])
-        
-        # Apply the same quaternion rotation to the axes to show actual physical orientation
-        if quaternion is not None and np.linalg.norm(quaternion) > 0:
-            try:
-                rotation = R.from_quat(quaternion)
-                axes_directions = rotation.apply(axes_directions)
-            except Exception as e:
-                logger.error(f"Error rotating axes: {e}")
-        
-        # Pass pre-rotated axes directions to the renderer
+        # Let the renderer handle the axes completely
         self.renderer.draw_3d_axes(
             center, 
-            None,  # Don't pass quaternion, we've already rotated the axes
+            quaternion,  # Pass the quaternion directly
             axis_length, 
-            axes_directions=axes_directions,  # Pass pre-rotated axes
             axis_colors=axis_colors, 
             font_manager=self.font_manager,
             device_type=self.device_name,
@@ -535,9 +458,3 @@ class DevicePanel:
         
         return None
     
-    def _draw_calibrate_prompt(self, x, y, w, h):
-        """Draw calibration prompt at bottom of active device box"""
-        button_text = "Press CALIBRATE to set reference orientation"
-        button_surface = self.font_manager.render_text(button_text, 'tiny', Colors.UNCALIBRATED)
-        button_rect = button_surface.get_rect(centerx=self.center[0], bottom=y + h - 5)
-        self.screen.blit(button_surface, button_rect)

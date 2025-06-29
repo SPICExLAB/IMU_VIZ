@@ -187,24 +187,7 @@ def apply_mobileposer_calibration(current_orientations, reference_device=None):
     ref_euler_initial = ref_rotation.as_euler('xyz', degrees=True)
     logger.info(f"INITIAL: Reference device ({reference_device}) orientation: "
                f"X={ref_euler_initial[0]:.1f}°, Y={ref_euler_initial[1]:.1f}°, Z={ref_euler_initial[2]:.1f}°")
-    
-    # For phone/watch reference, check if Y-flip is needed
-    y_flip_applied = False
-    if reference_device in ['phone', 'watch']:
-        # If Z axis is pointing approximately toward user (screen facing toward user)
-        if abs(ref_euler_initial[2]) < 90:
-            logger.info(f"Z-axis pointing toward user (value: {ref_euler_initial[2]:.1f}°), applying 180° Y-flip")
-            y_flip = R.from_euler('y', 180, degrees=True)
-            ref_rotation = y_flip * ref_rotation
-            y_flip_applied = True
-        else:
-            logger.info(f"Z-axis already pointing away (value: {ref_euler_initial[2]:.1f}°), no Y-flip needed")
-    
-    # Log reference device orientation after potential Y-flip
-    if y_flip_applied:
-        ref_euler_after_flip = ref_rotation.as_euler('xyz', degrees=True)
-        logger.info(f"AFTER Y-FLIP: Reference device orientation: "
-                  f"X={ref_euler_after_flip[0]:.1f}°, Y={ref_euler_after_flip[1]:.1f}°, Z={ref_euler_after_flip[2]:.1f}°")
+
     
     # Store calibration quaternions
     calibration_quats = {}
@@ -322,8 +305,9 @@ def parse_headphone_data(data_str):
     # This transforms: (X:right, Z:up, Y:forward) -> (X:left, Y:up, Z:forward)
     aligned_quat, aligned_accel = preprocess_headphone_data(device_quat, device_accel)
     
-    return timestamp, device_quat, device_accel, gyro, aligned_quat, aligned_accel
-
+    aligned_data = (aligned_quat, aligned_accel)
+    
+    return timestamp, device_quat, device_accel, gyro, aligned_data
 def parse_watch_data(data_str):
     """
     Parse Apple Watch data.
