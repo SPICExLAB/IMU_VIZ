@@ -29,8 +29,9 @@ class Colors:
     AXIS_Z = (60, 60, 255)      # Blue - Z axis
     
     # Status colors
-    CALIBRATED = (50, 255, 50)
-    UNCALIBRATED = (255, 200, 50)
+    CALIBRATED = (50, 255, 50)      # Green - Calibrated
+    UNCALIBRATED = (255, 200, 50)   # Yellow - Uncalibrated
+    REFERENCE = (255, 150, 255)     # Magenta - Reference device
     
     # Grid and highlights
     GRID = (40, 40, 50)

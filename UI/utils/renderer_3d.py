@@ -1,12 +1,15 @@
-"""3D rendering utilities with consistent coordinate systems"""
+"""3D rendering utilities with consistent coordinate systems and calibration visualization"""
 
 import numpy as np
 import pygame
 import math
 from scipy.spatial.transform import Rotation as R
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Renderer3D:
-    """Handles 3D rendering operations with consistent coordinate handling"""
+    """Handles 3D rendering operations with calibration-aware coordinate handling"""
     
     # Device 3D scales (for different shapes)
     DEVICE_SCALES = {
@@ -123,63 +126,86 @@ class Renderer3D:
         pygame.draw.line(self.screen, color, end_point, tuple(arrow_right.astype(int)), 3)
     
     def draw_3d_axes(self, center: tuple, quaternion: np.ndarray, axis_length: float = 40, 
-                     axis_colors=None, font_manager=None, device_type='phone'):
+                axis_colors=None, font_manager=None, device_type='phone', is_calibrated=False,
+                is_reference=False):
         """
-        Draw 3D coordinate axes with consistent device-specific coordinate systems
+        Draw 3D coordinate axes with consistent device-specific coordinate systems.
         
-        Screen coordinate convention:
-        - Positive Z: Away from viewer (into screen)
-        - Negative Z: Toward viewer (out of screen)
+        This properly handles the global reference frame vs device local frames.
+        
+        Args:
+            center: tuple - Center position on screen
+            quaternion: np.ndarray - Orientation quaternion [x, y, z, w]
+            axis_length: float - Length of axes arrows
+            axis_colors: list - Colors for each axis
+            font_manager: FontManager - For text rendering
+            device_type: str - Device type ('phone', 'watch', 'headphone', 'glasses', 'global')
+            is_calibrated: bool - Whether device is calibrated
+            is_reference: bool - Whether this is the reference device
         """
         # Use provided colors or defaults
         if axis_colors is None:
             axis_colors = [(255, 60, 60), (60, 255, 60), (60, 60, 255)]  # R, G, B
         
-        # Device-specific coordinate system directions
+        # Define initial axes based on device type
         if device_type == 'global':
-            # Global frame (X:left, Y:up, Z:forward)
-            # Forward means away from viewer (into screen)
+            # Global reference frame always has fixed axes:
+            # X pointing left, Y pointing up, Z pointing forward
             axes_directions = np.array([
                 [-1, 0, 0],   # X-axis (Red) - Left
                 [0, 1, 0],    # Y-axis (Green) - Up
-                [0, 0, -1]    # Z-axis (Blue) - Forward (into screen, away from viewer)
+                [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
             ])
             axis_labels = ['X', 'Y', 'Z']
-            
-        elif device_type == 'glasses':
-            # Rokid glasses: Z is FORWARD (into screen, away from viewer)
-            axes_directions = np.array([
-                [1, 0, 0],    # X-axis (Red) - Right
-                [0, 1, 0],    # Y-axis (Green) - Up
-                [0, 0, -1]    # Z-axis (Blue) - Forward (into screen, away from viewer)
-            ])
-            axis_labels = ['X', 'Y', 'Z']
-            
-        elif device_type == 'headphone':
-            # Headphone: Y is forward, Z is up
-            axes_directions = np.array([
-                [1, 0, 0],    # X-axis (Red) - Right
-                [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
-                [0, -1, 0]    # Z-axis (Blue) - Forward (Y in device frame)
-            ])
-            axis_labels = ['X', 'Y', 'Z']
-            
         else:
-            # Phone/watch: Standard coordinate system (Z toward user)
-            axes_directions = np.array([
-                [1, 0, 0],    # X-axis (Red) - Right
-                [0, 1, 0],    # Y-axis (Green) - Up in 3D space
-                [0, 0, 1]     # Z-axis (Blue) - Toward user (out of screen, toward viewer)
-            ])
+            # For actual devices, use their local coordinate systems
+            if device_type == 'phone' or device_type == 'watch':
+                if is_calibrated: 
+                    axes_directions = np.array([
+                    [-1, 0, 0],    # X-axis (Red) - Right
+                    [0, 1, 0],    # Y-axis (Green) - Up
+                    [0, 0, -1]     # Z-axis (Blue) - Toward user
+                ])
+                else:
+                    # Phone/Watch: X-right, Y-up, Z-toward user
+                    axes_directions = np.array([
+                        [1, 0, 0],    # X-axis (Red) - Right
+                        [0, 1, 0],    # Y-axis (Green) - Up
+                        [0, 0, 1]     # Z-axis (Blue) - Toward user
+                    ])
+            elif device_type == 'headphone':
+                # Headphone: X-right, Z-up, Y-forward
+                axes_directions = np.array([
+                    [1, 0, 0],    # X-axis (Red) - Right
+                    [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
+                    [0, 1, 0]     # Z-axis (Blue) - Forward (Y in device frame)
+                ])
+            elif device_type == 'glasses':
+                # AR Glasses: X-right, Y-up, Z-forward
+                axes_directions = np.array([
+                    [1, 0, 0],    # X-axis (Red) - Right
+                    [0, 1, 0],    # Y-axis (Green) - Up
+                    [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
+                ])
+            else:
+                # Default to standard right-handed system
+                axes_directions = np.array([
+                    [1, 0, 0],    # X-axis (Red)
+                    [0, 1, 0],    # Y-axis (Green)
+                    [0, 0, 1]     # Z-axis (Blue)
+                ])
+                
             axis_labels = ['X', 'Y', 'Z']
         
-        # Apply quaternion rotation
-        if quaternion is not None and np.linalg.norm(quaternion) > 0:
+        # Apply quaternion rotation to the axes
+        # No rotation needed for global reference
+        if device_type != 'global' and quaternion is not None and np.linalg.norm(quaternion) > 0:
             try:
                 rotation = R.from_quat(quaternion)
+                # Apply rotation to the axes
                 axes_directions = rotation.apply(axes_directions)
             except Exception as e:
-                print(f"Error rotating axes: {e}")
+                logger.error(f"Error rotating axes: {e}")
         
         # Draw arrows
         for i, (direction, color, label) in enumerate(zip(axes_directions, axis_colors, axis_labels)):

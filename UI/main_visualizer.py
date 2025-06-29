@@ -1,8 +1,9 @@
-"""Main IMU Visualizer - Enhanced with AR Glasses Support and Gravity Toggle"""
+"""Main IMU Visualizer - Enhanced with Reference Device Selection"""
 
 import pygame
 import numpy as np
 import time
+import logging
 from collections import deque
 
 from .utils.colors import Colors
@@ -13,8 +14,10 @@ from .components.reference_panel import ReferencePanel
 from .components.calibration_button import CalibrationButton
 from .layouts.device_grid import DeviceGridLayout
 
+logger = logging.getLogger(__name__)
+
 class IMUVisualizer:
-    """Enhanced IMU visualizer with AR Glasses support and gravity toggle"""
+    """Enhanced IMU visualizer with reference device selection before calibration"""
     
     def __init__(self, width=1400, height=800):
         pygame.init()
@@ -34,6 +37,11 @@ class IMUVisualizer:
         # Device data storage
         self.device_data = {}
         
+        # Reference device for calibration
+        self.reference_device = None
+        # Selected reference device (before calibration)
+        self.selected_reference_device = None
+        
         # Gravity toggle state (True = remove gravity, False = include gravity)
         self.gravity_removal_enabled = True
         
@@ -46,7 +54,7 @@ class IMUVisualizer:
         # Waveform settings
         self.waveform_history = 300
         
-        print("Enhanced IMU Visualizer initialized with AR Glasses support and gravity toggle")
+        logger.info("Enhanced IMU Visualizer initialized with reference device selection before calibration")
     
     def _init_components(self):
         """Initialize UI components"""
@@ -138,13 +146,43 @@ class IMUVisualizer:
     def toggle_gravity_removal(self):
         """Toggle gravity removal for AR glasses"""
         self.gravity_removal_enabled = not self.gravity_removal_enabled
-        print(f"Gravity removal {'enabled' if self.gravity_removal_enabled else 'disabled'} for AR glasses")
+        logger.info(f"Gravity removal {'enabled' if self.gravity_removal_enabled else 'disabled'} for AR glasses")
         return "toggle_gravity"
+    
+    def select_reference_device(self, device_id):
+        """Select a device as reference before calibration"""
+        if device_id in self.device_data:
+            self.selected_reference_device = device_id
+            logger.info(f"Selected {device_id} as reference device")
+            return True
+        return False
+    
+    def get_selected_reference_device(self):
+        """Get the currently selected reference device"""
+        return self.selected_reference_device
+    
+    def set_reference_device(self, device_id):
+        """Set the active reference device after calibration"""
+        if device_id in self.device_data:
+            self.reference_device = device_id
+            # Clear selected reference since we now have an actual reference
+            self.selected_reference_device = None
+            logger.info(f"Set {device_id} as active reference device")
+            return True
+        return False
     
     def _update_device_panels(self):
         """Update device panels based on active devices"""
+        # Always create panels for all possible devices
+        all_devices = self.device_order.copy()
+        
+        # Get positions for all devices (both active and inactive)
         active_devices = self.get_active_devices()
-        positions = self.device_layout.calculate_positions(active_devices)
+        positions = self.device_layout.calculate_positions(all_devices)
+        
+        # Mark which ones are active
+        for device_name in positions:
+            positions[device_name]['active'] = device_name in active_devices
         
         # Create or update device panels
         for device_name in self.device_order:
@@ -175,18 +213,21 @@ class IMUVisualizer:
                 if self.calibration_button.is_clicked(event):
                     return "calibrate"
                 
-                # Check device panel clicks (gravity toggle)
+                # Check device panel clicks
                 for device_name, device_panel in self.device_panels.items():
                     if device_panel.is_active:
                         panel_action = device_panel.handle_click(event.pos)
                         if panel_action == 'toggle_gravity':
                             return self.toggle_gravity_removal()
+                        elif panel_action == 'select_reference':
+                            if self.select_reference_device(device_name):
+                                return f"select_reference:{device_name}"
                 
                 # Check waveform panel clicks
                 waveform_action = self.waveform_panel.handle_click(event.pos)
                 if waveform_action:
                     action_type, device_name = waveform_action
-                    # print(f"Waveform action: {action_type} for {device_name}")
+                    # Handle waveform actions
         
         return None
     
@@ -206,10 +247,23 @@ class IMUVisualizer:
         self._update_device_panels()
         for device_name in self.device_order:
             if device_name in self.device_panels:
-                device_data = self.device_data.get(device_name)
-                is_calibrated = device_data['is_calibrated'] if device_data else False
-                # Pass gravity enabled state to device panels
-                self.device_panels[device_name].draw(device_data, is_calibrated, self.gravity_removal_enabled)
+                device_data = self.device_data.get(device_name, None)
+                if device_data and device_name in self.get_active_devices():
+                    is_calibrated = device_data.get('is_calibrated', False)
+                    is_reference = (device_name == self.reference_device)
+                    is_selected_as_reference = (device_name == self.selected_reference_device)
+                    
+                    # Pass all status flags to device panels
+                    self.device_panels[device_name].draw(
+                        device_data, 
+                        is_calibrated, 
+                        is_reference,
+                        is_selected_as_reference,
+                        self.gravity_removal_enabled
+                    )
+                else:
+                    # Draw inactive panel
+                    self.device_panels[device_name].draw(None, False, False, False, True)
         
         # Draw calibration button
         self.calibration_button.draw()
@@ -217,14 +271,14 @@ class IMUVisualizer:
         # Draw waveform panel
         self.waveform_panel.draw(self.device_data)
         
-        # Draw connection status for AR glasses
+        # Draw connection status and calibration info
         self._draw_connection_status()
         
         # Update display
         pygame.display.flip()
     
     def _draw_connection_status(self):
-        """Draw connection status information"""
+        """Draw connection status and calibration information"""
         # Show active device count and types
         active_devices = self.get_active_devices()
         
@@ -248,6 +302,16 @@ class IMUVisualizer:
         status_surface = self.font_manager.render_text(status_text, 'small', Colors.TEXT_SECONDARY)
         self.screen.blit(status_surface, (20, self.height - 25))
         
+        # Show reference device info
+        if self.reference_device:
+            ref_text = f"Reference Device: {self.reference_device.upper()}"
+            ref_surface = self.font_manager.render_text(ref_text, 'small', Colors.REFERENCE)
+            self.screen.blit(ref_surface, (300, self.height - 25))
+        elif self.selected_reference_device:
+            ref_text = f"Selected Reference: {self.selected_reference_device.upper()} (press CALIBRATE to confirm)"
+            ref_surface = self.font_manager.render_text(ref_text, 'small', Colors.REFERENCE)
+            self.screen.blit(ref_surface, (300, self.height - 25))
+        
         # Show listening port
         port_text = "Listening on UDP port 8001"
         port_surface = self.font_manager.render_text(port_text, 'tiny', Colors.TEXT_TERTIARY)
@@ -259,8 +323,20 @@ class IMUVisualizer:
             gravity_color = (100, 200, 100) if self.gravity_removal_enabled else (200, 100, 100)
             gravity_surface = self.font_manager.render_text(gravity_status, 'tiny', gravity_color)
             self.screen.blit(gravity_surface, (300, self.height - 45))
+        
+        # Show calibration help if no reference selected
+        if not self.selected_reference_device and not self.reference_device:
+            help_text = "Select a reference device to define the global coordinate system"
+            help_surface = self.font_manager.render_text(help_text, 'small', Colors.REFERENCE)
+            help_rect = help_surface.get_rect(centerx=self.left_panel_width//2 + 10, y=self.height - 110)
+            self.screen.blit(help_surface, help_rect)
+        elif self.selected_reference_device and not self.reference_device:
+            help_text = "Press CALIBRATE to confirm reference device and perform calibration"
+            help_surface = self.font_manager.render_text(help_text, 'small', Colors.REFERENCE)
+            help_rect = help_surface.get_rect(centerx=self.left_panel_width//2 + 10, y=self.height - 110)
+            self.screen.blit(help_surface, help_rect)
     
     def cleanup(self):
         """Clean up resources"""
         pygame.quit()
-        print("Enhanced IMU visualizer with AR Glasses support and gravity toggle cleaned up")
+        logger.info("Enhanced IMU visualizer with reference device selection cleaned up")
