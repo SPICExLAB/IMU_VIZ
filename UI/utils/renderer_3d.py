@@ -125,9 +125,10 @@ class Renderer3D:
         pygame.draw.line(self.screen, color, end_point, tuple(arrow_left.astype(int)), 3)
         pygame.draw.line(self.screen, color, end_point, tuple(arrow_right.astype(int)), 3)
     
-    def draw_3d_axes(self, center: tuple, quaternion: np.ndarray, axis_length: float = 40, 
-                axis_colors=None, font_manager=None, device_type='phone', is_calibrated=False,
-                is_reference=False):
+    def draw_3d_axes(self, center, quaternion=None, axis_length=40, 
+                axes_directions=None, axis_colors=None, 
+                font_manager=None, device_type='phone', 
+                is_calibrated=False, is_reference=False):
         """
         Draw 3D coordinate axes with consistent device-specific coordinate systems.
         
@@ -137,6 +138,7 @@ class Renderer3D:
             center: tuple - Center position on screen
             quaternion: np.ndarray - Orientation quaternion [x, y, z, w]
             axis_length: float - Length of axes arrows
+            axes_directions: np.ndarray - Pre-rotated axis directions (if provided)
             axis_colors: list - Colors for each axis
             font_manager: FontManager - For text rendering
             device_type: str - Device type ('phone', 'watch', 'headphone', 'glasses', 'global')
@@ -147,65 +149,72 @@ class Renderer3D:
         if axis_colors is None:
             axis_colors = [(255, 60, 60), (60, 255, 60), (60, 60, 255)]  # R, G, B
         
-        # Define initial axes based on device type
-        if device_type == 'global':
-            # Global reference frame always has fixed axes:
-            # X pointing left, Y pointing up, Z pointing forward
-            axes_directions = np.array([
-                [-1, 0, 0],   # X-axis (Red) - Left
-                [0, 1, 0],    # Y-axis (Green) - Up
-                [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
-            ])
-            axis_labels = ['X', 'Y', 'Z']
+        # If axes directions are provided, use them directly
+        if axes_directions is not None:
+            pass  # Use the pre-rotated directions
+        # Otherwise, define initial axes based on device type and apply rotation
         else:
-            # For actual devices, use their local coordinate systems
-            if device_type == 'phone' or device_type == 'watch':
-                if is_calibrated: 
-                    axes_directions = np.array([
-                    [-1, 0, 0],    # X-axis (Red) - Right
-                    [0, 1, 0],    # Y-axis (Green) - Up
-                    [0, 0, -1]     # Z-axis (Blue) - Toward user
-                ])
-                else:
-                    # Phone/Watch: X-right, Y-up, Z-toward user
-                    axes_directions = np.array([
-                        [1, 0, 0],    # X-axis (Red) - Right
-                        [0, 1, 0],    # Y-axis (Green) - Up
-                        [0, 0, 1]     # Z-axis (Blue) - Toward user
-                    ])
-            elif device_type == 'headphone':
-                # Headphone: X-right, Z-up, Y-forward
+            if device_type == 'global':
+                # Global reference frame always has fixed axes:
+                # X pointing left, Y pointing up, Z pointing forward
                 axes_directions = np.array([
-                    [1, 0, 0],    # X-axis (Red) - Right
-                    [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
-                    [0, 1, 0]     # Z-axis (Blue) - Forward (Y in device frame)
-                ])
-            elif device_type == 'glasses':
-                # AR Glasses: X-right, Y-up, Z-forward
-                axes_directions = np.array([
-                    [1, 0, 0],    # X-axis (Red) - Right
+                    [-1, 0, 0],   # X-axis (Red) - Left
                     [0, 1, 0],    # Y-axis (Green) - Up
                     [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
                 ])
             else:
-                # Default to standard right-handed system
-                axes_directions = np.array([
-                    [1, 0, 0],    # X-axis (Red)
-                    [0, 1, 0],    # Y-axis (Green)
-                    [0, 0, 1]     # Z-axis (Blue)
-                ])
-                
-            axis_labels = ['X', 'Y', 'Z']
+                # For actual devices, use their local coordinate systems
+                if device_type == 'phone' or device_type == 'watch':
+                    # IMPORTANT: For calibrated reference devices, show axes in global frame
+                    # This ensures the visualization matches the physical orientation
+                    if is_calibrated and is_reference:
+                        axes_directions = np.array([
+                            [-1, 0, 0],   # X-axis (Red) - Left (was Right)
+                            [0, 1, 0],    # Y-axis (Green) - Up (unchanged)
+                            [0, 0, -1]    # Z-axis (Blue) - Forward (was Toward)
+                        ])
+                        logger.debug(f"Using global-aligned axes for calibrated reference {device_type}")
+                    else:
+                        # Phone/Watch: X-right, Y-up, Z-toward user
+                        axes_directions = np.array([
+                            [1, 0, 0],    # X-axis (Red) - Right
+                            [0, 1, 0],    # Y-axis (Green) - Up
+                            [0, 0, 1]     # Z-axis (Blue) - Toward user
+                        ])
+                elif device_type == 'headphone':
+                    # Headphone: X-right, Z-up, Y-forward
+                    axes_directions = np.array([
+                        [1, 0, 0],    # X-axis (Red) - Right
+                        [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
+                        [0, 1, 0]     # Z-axis (Blue) - Forward (Y in device frame)
+                    ])
+                elif device_type == 'glasses':
+                    # AR Glasses: X-right, Y-up, Z-forward
+                    axes_directions = np.array([
+                        [1, 0, 0],    # X-axis (Red) - Right
+                        [0, 1, 0],    # Y-axis (Green) - Up
+                        [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
+                    ])
+                else:
+                    # Default to standard right-handed system
+                    axes_directions = np.array([
+                        [1, 0, 0],    # X-axis (Red)
+                        [0, 1, 0],    # Y-axis (Green)
+                        [0, 0, 1]     # Z-axis (Blue)
+                    ])
+                    
+            # Apply quaternion rotation to the axes if provided
+            # No rotation needed for global reference
+            if device_type != 'global' and quaternion is not None and np.linalg.norm(quaternion) > 0:
+                try:
+                    rotation = R.from_quat(quaternion)
+                    # Apply rotation to the axes
+                    axes_directions = rotation.apply(axes_directions)
+                except Exception as e:
+                    logger.error(f"Error rotating axes: {e}")
         
-        # Apply quaternion rotation to the axes
-        # No rotation needed for global reference
-        if device_type != 'global' and quaternion is not None and np.linalg.norm(quaternion) > 0:
-            try:
-                rotation = R.from_quat(quaternion)
-                # Apply rotation to the axes
-                axes_directions = rotation.apply(axes_directions)
-            except Exception as e:
-                logger.error(f"Error rotating axes: {e}")
+        # Get axis labels
+        axis_labels = ['X', 'Y', 'Z']
         
         # Draw arrows
         for i, (direction, color, label) in enumerate(zip(axes_directions, axis_colors, axis_labels)):

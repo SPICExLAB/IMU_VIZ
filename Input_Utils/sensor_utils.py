@@ -111,24 +111,24 @@ def preprocess_rokid_data(quaternion, acceleration):
     
     return aligned_quaternion, aligned_acceleration
 
-def apply_calibration_transform(ori, acc, calibration_quats, device_id):
+def apply_calibration_transform(ori, acc, calibration_quats, device_id, reference_device=None):
     """
     Apply calibration transformation to sensor data without unwanted rotations.
     
     This assumes the user has physically aligned the device with the global frame
-    before calibration. No Y-axis flip is applied as that happens physically.
+    before calibration.
     
     Args:
         ori: np.ndarray - Device orientation quaternion [x, y, z, w]
         acc: np.ndarray - Device acceleration [x, y, z]
         calibration_quats: dict - Calibration quaternions by device_id
         device_id: str - Device identifier
+        reference_device: str - Current reference device (optional)
         
     Returns:
         tuple of (transformed_orientation, transformed_acceleration)
     """
     # Get the calibration quaternion for this device
-    # If not calibrated, use identity quaternion [0, 0, 0, 1]
     device_calib_quat = calibration_quats.get(device_id, np.array([0, 0, 0, 1]))
 
     # Convert quaternions to rotation matrices
@@ -140,10 +140,7 @@ def apply_calibration_transform(ori, acc, calibration_quats, device_id):
     transformed_rot = calib_rot.T.dot(device_rot)
     
     # Apply same transformation to acceleration
-    # First align acceleration to device's local frame
     acc_local = device_rot.dot(acc)
-    
-    # Then transform to global frame using calibration
     transformed_acc = calib_rot.T.dot(acc_local)
     
     # Convert rotation matrix back to quaternion
@@ -171,16 +168,13 @@ def apply_mobileposer_calibration(current_orientations, reference_device=None):
     if not current_orientations:
         return {}, None
     
-    # If no reference device specified, select one automatically
+    # Select reference device if not specified
     if reference_device is None or reference_device not in current_orientations:
-        # Priority order: phone, glasses, watch, headphone
         for device in ['phone', 'glasses', 'watch', 'headphone']:
             if device in current_orientations:
                 reference_device = device
                 break
-        
         if reference_device is None:
-            # Still no reference device, use first in dict
             reference_device = next(iter(current_orientations))
     
     logger.info(f"Calibrating using {reference_device} as reference device")
@@ -189,21 +183,28 @@ def apply_mobileposer_calibration(current_orientations, reference_device=None):
     ref_quat = current_orientations[reference_device]
     ref_rotation = R.from_quat(ref_quat)
     
-    # For phone/watch reference, we need to check if we need a transformation
-    # We're assuming the user has physically oriented the device with screen facing away
-    # But we need to check the orientation to see if it's already aligned with global frame
+    # Log initial reference device orientation
+    ref_euler_initial = ref_rotation.as_euler('xyz', degrees=True)
+    logger.info(f"INITIAL: Reference device ({reference_device}) orientation: "
+               f"X={ref_euler_initial[0]:.1f}°, Y={ref_euler_initial[1]:.1f}°, Z={ref_euler_initial[2]:.1f}°")
+    
+    # For phone/watch reference, check if Y-flip is needed
+    y_flip_applied = False
     if reference_device in ['phone', 'watch']:
-        # Convert to Euler angles to check orientation
-        ref_euler = ref_rotation.as_euler('xyz', degrees=True)
-        logger.info(f"Reference device ({reference_device}) Euler angles: {ref_euler}")
-        
-        # If Z axis is approximately pointing toward user (screen facing toward user)
-        # we need to apply a 180° Y-flip to correctly align with global frame
-        # This happens if the user calibrated with screen facing them
-        if abs(ref_euler[2]) < 90:  # Z-axis pointing approximately toward user
-            logger.info(f"Applying 180° Y-flip to {reference_device} to align with global frame")
+        # If Z axis is pointing approximately toward user (screen facing toward user)
+        if abs(ref_euler_initial[2]) < 90:
+            logger.info(f"Z-axis pointing toward user (value: {ref_euler_initial[2]:.1f}°), applying 180° Y-flip")
             y_flip = R.from_euler('y', 180, degrees=True)
             ref_rotation = y_flip * ref_rotation
+            y_flip_applied = True
+        else:
+            logger.info(f"Z-axis already pointing away (value: {ref_euler_initial[2]:.1f}°), no Y-flip needed")
+    
+    # Log reference device orientation after potential Y-flip
+    if y_flip_applied:
+        ref_euler_after_flip = ref_rotation.as_euler('xyz', degrees=True)
+        logger.info(f"AFTER Y-FLIP: Reference device orientation: "
+                  f"X={ref_euler_after_flip[0]:.1f}°, Y={ref_euler_after_flip[1]:.1f}°, Z={ref_euler_after_flip[2]:.1f}°")
     
     # Store calibration quaternions
     calibration_quats = {}
@@ -217,13 +218,17 @@ def apply_mobileposer_calibration(current_orientations, reference_device=None):
             calibration_quats[device_id] = ref_rotation.as_quat()
         else:
             # Other devices get calibrated relative to the reference device
-            # Calculate relative quaternion for calibration
             relative_rotation = ref_rotation.inv() * curr_rotation
             calibration_quats[device_id] = relative_rotation.as_quat()
     
-    # Log calibration results
+    # Log final calibration values
     for device_id, quat in calibration_quats.items():
-        logger.info(f"Calibration quat for {device_id}: [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]")
+        try:
+            calib_euler = R.from_quat(quat).as_euler('xyz', degrees=True)
+            logger.info(f"CALIBRATION: {device_id} orientation: "
+                      f"X={calib_euler[0]:.1f}°, Y={calib_euler[1]:.1f}°, Z={calib_euler[2]:.1f}°")
+        except:
+            logger.info(f"CALIBRATION: {device_id} quaternion: [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]")
     
     return calibration_quats, reference_device
 

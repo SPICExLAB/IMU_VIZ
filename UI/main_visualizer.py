@@ -107,7 +107,8 @@ class IMUVisualizer:
                 'is_calibrated': False,
                 'frequency': 0,
                 'frequency_counter': 0,
-                'frequency_timer': time.time()
+                'frequency_timer': time.time(),
+                'log_counter': 0  # Add counter for periodic logging
             }
         
         data = self.device_data[device_id]
@@ -120,6 +121,18 @@ class IMUVisualizer:
         data['last_update'] = time.time()
         data['sample_count'] += 1
         data['is_calibrated'] = is_calibrated
+        
+        # Periodic logging of device orientation (every 120 frames)
+        data['log_counter'] = (data['log_counter'] + 1) % 120
+        if data['log_counter'] == 0:
+            try:
+                euler = calculate_euler_from_quaternion(imu_data.quaternion)
+                status = "CALIBRATED" if is_calibrated else "UNCALIBRATED"
+                is_ref = "REFERENCE" if device_id == self.reference_device else ""
+                logger.debug(f"PERIODIC {status} {is_ref}: {device_id} orientation: "
+                            f"Roll={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Yaw={euler[2]:.1f}°")
+            except:
+                pass
         
         # Calculate frequency
         data['frequency_counter'] += 1

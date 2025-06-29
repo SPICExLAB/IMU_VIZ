@@ -30,6 +30,7 @@ from Input_Utils.sensor_utils import (
     apply_calibration_transform,
     apply_gravity_compensation,
     calculate_euler_from_quaternion,
+    apply_mobileposer_calibration,
     
     # Parsing functions
     parse_ios_data,
@@ -39,8 +40,11 @@ from Input_Utils.sensor_utils import (
 # Import calibration module
 from Input_Utils.sensor_calibrate import IMUCalibrator
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO,
+                              format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                   datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
+
 
 class IMUReceiver:
     """Core IMU receiver with reference device selection before calibration"""
@@ -97,6 +101,14 @@ class IMUReceiver:
     def _select_reference_device(self, device_id):
         """Select a device as reference (can be called via API)"""
         if device_id in self.current_orientations:
+            # Log orientation at time of selection
+            curr_quat = self.current_orientations[device_id]
+            euler = calculate_euler_from_quaternion(curr_quat)
+            logger.info(f"REFERENCE SELECTION: {device_id} orientation at selection: "
+                    f"Roll={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Yaw={euler[2]:.1f}°")
+            logger.info(f"REFERENCE SELECTION: {device_id} quaternion at selection: "
+                    f"[{curr_quat[0]:.3f}, {curr_quat[1]:.3f}, {curr_quat[2]:.3f}, {curr_quat[3]:.3f}]")
+            
             success = self.visualizer.select_reference_device(device_id)
             if success:
                 logger.info(f"Selected {device_id} as reference device")
@@ -203,6 +215,17 @@ class IMUReceiver:
         try:
             timestamp, device_quat, device_accel, gyro, aligned_data = parsed_data
             
+            # Log initial connection and orientation
+            if device_id not in self.current_orientations:
+                logger.info(f"Initial connection from {device_id} at {addr[0]}")
+                
+                # Log initial orientation
+                euler = calculate_euler_from_quaternion(device_quat)
+                logger.info(f"CONNECTED: {device_id} initial orientation: "
+                        f"Roll={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Yaw={euler[2]:.1f}°")
+                logger.info(f"CONNECTED: {device_id} initial quaternion: "
+                        f"[{device_quat[0]:.3f}, {device_quat[1]:.3f}, {device_quat[2]:.3f}, {device_quat[3]:.3f}]")
+            
             # Store raw data for future reference
             self.raw_device_data[device_id] = {
                 'quaternion': device_quat,
@@ -233,16 +256,31 @@ class IMUReceiver:
                 
                 # Store the original quaternion for calibration
                 self.current_orientations[device_id] = device_quat
+                
+                # Log current raw orientation periodically (every 30 frames)
+                if device_id in self.raw_device_data and 'frame_counter' in self.raw_device_data[device_id]:
+                    frame_counter = self.raw_device_data[device_id]['frame_counter'] + 1
+                    self.raw_device_data[device_id]['frame_counter'] = frame_counter
+                    
+                    if frame_counter % 30 == 0:
+                        euler = calculate_euler_from_quaternion(device_quat)
+                        logger.debug(f"RAW: {device_id} orientation: "
+                                f"Roll={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Yaw={euler[2]:.1f}°")
+                else:
+                    # Initialize frame counter
+                    self.raw_device_data[device_id]['frame_counter'] = 0
             
             # Apply calibration transformation if device is calibrated
             calibration_quats = self.calibrator.get_calibration_quaternions()
+            reference_device = self.calibrator.reference_device
             if device_id in calibration_quats:
                 # Transform using calibration
                 global_quat, global_acc = apply_calibration_transform(
                     quat_for_calibration, 
                     accel_for_processing, 
                     calibration_quats, 
-                    device_id
+                    device_id,
+                    reference_device=reference_device
                 )
             else:
                 # Not calibrated - use as is
@@ -272,7 +310,7 @@ class IMUReceiver:
             # Update visualization
             is_calibrated = device_id in self.calibrator.reference_quaternions
             self.visualizer.update_device_data(imu_data, is_calibrated)
-                
+                    
         except Exception as e:
             logger.warning(f"Error processing {device_id} data: {e}")
             import traceback
@@ -292,6 +330,17 @@ class IMUReceiver:
         if not reference_device:
             logger.warning("No reference device selected for calibration")
             return None
+        
+        # Log raw orientation at time of calibration
+        for device_id, quaternion in self.current_orientations.items():
+            try:
+                euler = calculate_euler_from_quaternion(quaternion)
+                logger.info(f"PRE-CALIBRATION RAW: {device_id} orientation: "
+                        f"Roll={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Yaw={euler[2]:.1f}°")
+                logger.info(f"PRE-CALIBRATION RAW: {device_id} quaternion: "
+                        f"[{quaternion[0]:.3f}, {quaternion[1]:.3f}, {quaternion[2]:.3f}, {quaternion[3]:.3f}]")
+            except:
+                pass
         
         # Apply calibration
         from Input_Utils.sensor_utils import apply_mobileposer_calibration
@@ -315,10 +364,37 @@ class IMUReceiver:
         # Log Euler angles for each device after calibration
         for device_id, quaternion in self.current_orientations.items():
             try:
+                # Log raw orientation after calibration
                 euler = calculate_euler_from_quaternion(quaternion)
-                logger.info(f"{device_id} orientation: Roll={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Yaw={euler[2]:.1f}°")
-            except:
-                pass
+                logger.info(f"POST-CALIBRATION RAW: {device_id} orientation: "
+                        f"Roll={euler[0]:.1f}°, Pitch={euler[1]:.1f}°, Yaw={euler[2]:.1f}°")
+                
+                # If device is calibrated, log its calibrated orientation
+                if device_id in calibration_quats:
+                    cal_quat = calibration_quats[device_id]
+                    cal_euler = calculate_euler_from_quaternion(cal_quat)
+                    logger.info(f"CALIBRATION QUATERNION: {device_id}: "
+                            f"[{cal_quat[0]:.3f}, {cal_quat[1]:.3f}, {cal_quat[2]:.3f}, {cal_quat[3]:.3f}]")
+                    logger.info(f"CALIBRATION EULER: {device_id}: "
+                            f"Roll={cal_euler[0]:.1f}°, Pitch={cal_euler[1]:.1f}°, Yaw={cal_euler[2]:.1f}°")
+                    
+                    # Attempt to log what would be displayed with this calibration
+                    try:
+                        # This will show what happens when we apply the calibration to current orientation
+                        global_quat, _ = apply_calibration_transform(
+                            quaternion, 
+                            np.zeros(3), 
+                            calibration_quats, 
+                            device_id
+                        )
+                        display_euler = calculate_euler_from_quaternion(global_quat)
+                        logger.info(f"DISPLAY ORIENTATION: {device_id}: "
+                                f"Roll={display_euler[0]:.1f}°, Pitch={display_euler[1]:.1f}°, Yaw={display_euler[2]:.1f}°")
+                    except Exception as e:
+                        logger.warning(f"Could not calculate display orientation: {e}")
+                        
+            except Exception as e:
+                logger.warning(f"Could not log orientation for {device_id}: {e}")
         
         return ref_device
     

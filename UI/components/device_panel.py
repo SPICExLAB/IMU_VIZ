@@ -389,7 +389,7 @@ class DevicePanel:
             axis_length = device_size * 0.5  # Appropriate for glasses
         else:
             axis_length = device_size * 0.8
-            
+                
         axis_colors = [Colors.AXIS_X, Colors.AXIS_Y, Colors.AXIS_Z]
         
         # Get calibration status from the position_info
@@ -398,10 +398,50 @@ class DevicePanel:
         # Use class properties for reference status
         is_reference = self.is_reference
         
+        # Define device-specific coordinate axes in local frame
+        if self.device_name == 'phone' or self.device_name == 'watch':
+            # Always use the device's local coordinate system
+            axes_directions = np.array([
+                [1, 0, 0],    # X-axis (Red) - Right
+                [0, 1, 0],    # Y-axis (Green) - Up
+                [0, 0, 1]     # Z-axis (Blue) - Toward user
+            ])
+        elif self.device_name == 'headphone':
+            # Headphone local coordinates
+            axes_directions = np.array([
+                [1, 0, 0],    # X-axis (Red) - Right
+                [0, 0, 1],    # Y-axis (Green) - Up (Z in device frame)
+                [0, 1, 0]     # Z-axis (Blue) - Forward (Y in device frame)
+            ])
+        elif self.device_name == 'glasses':
+            # AR Glasses local coordinates
+            axes_directions = np.array([
+                [1, 0, 0],    # X-axis (Red) - Right
+                [0, 1, 0],    # Y-axis (Green) - Up
+                [0, 0, -1]    # Z-axis (Blue) - Forward
+            ])
+        else:
+            # Default local coordinates
+            axes_directions = np.array([
+                [1, 0, 0],    # X-axis (Red) - Right
+                [0, 1, 0],    # Y-axis (Green) - Up
+                [0, 0, 1]     # Z-axis (Blue) - Forward
+            ])
+        
+        # Apply the same quaternion rotation to the axes to show actual physical orientation
+        if quaternion is not None and np.linalg.norm(quaternion) > 0:
+            try:
+                rotation = R.from_quat(quaternion)
+                axes_directions = rotation.apply(axes_directions)
+            except Exception as e:
+                logger.error(f"Error rotating axes: {e}")
+        
+        # Pass pre-rotated axes directions to the renderer
         self.renderer.draw_3d_axes(
             center, 
-            quaternion, 
+            None,  # Don't pass quaternion, we've already rotated the axes
             axis_length, 
+            axes_directions=axes_directions,  # Pass pre-rotated axes
             axis_colors=axis_colors, 
             font_manager=self.font_manager,
             device_type=self.device_name,
