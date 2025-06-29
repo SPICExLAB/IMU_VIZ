@@ -37,45 +37,59 @@ class IMUData:
     euler: np.ndarray = None   # [nod, tilt, turn] for Rokid glasses
 
 
+# def preprocess_headphone_data(quaternion, acceleration):
+#     """
+#     Transform headphone data to align with global frame using proper rotation.
+    
+#     Headphone device frame:
+#     - X: [1, 0, 0] - Right
+#     - Y: [0, -1, 0] - Forward (into screen)
+#     - Z: [0, 0, 1] - Up
+    
+#     Global frame:
+#     - X: [-1, 0, 0] - Left
+#     - Y: [0, 1, 0] - Up
+#     - Z: [0, 0, -1] - Forward (into screen)
+#     """
+#     qx, qy, qz, qw = quaternion
+#     aligned_quaternion = np.array([-qx, -qz, -qy, qw])
+    
+#     # Apply the same transformation to acceleration
+#     aligned_acceleration = np.array([
+#         -acceleration[0],  # Negated X (right to left)
+#         acceleration[2],   # Z becomes Y (up)
+#         acceleration[1]    # Y becomes Z (forward/into screen)
+#     ])
+    
+#     return aligned_quaternion, aligned_acceleration
+
 def preprocess_headphone_data(quaternion, acceleration):
     """
-    Preprocess headphone data to align DIRECTLY with global coordinate system.
-    
-    Headphone device frame: X: Right, Z: Up, Y: Forward
-    Global frame:           X: Left,  Y: Up, Z: Forward
-    
-    Args:
-        quaternion: np.ndarray - Orientation quaternion [x, y, z, w]
-        acceleration: np.ndarray - Acceleration [x, y, z]
-        
-    Returns:
-        tuple of (aligned_quaternion, aligned_acceleration)
+    Transform headphone quaternion to represent rotation in world frame.
     """
-    # Direct transformation to global frame:
-    # 1. Negate X (right → left)
-    # 2. Keep Y (up)
-    # 3. Keep Z (forward)
-    # 4. Apply rotations to align axes
-    
-    # Create combined transformation:
-    # - Swap Y and Z (90° X rotation)
-    # - Negate X (180° Y rotation)
-    transform = R.from_euler('xy', [90, 180], degrees=True)
-    
-    # Apply to quaternion
+    # Get current device rotation
     device_rotation = R.from_quat(quaternion)
-    aligned_rotation = transform * device_rotation
-    aligned_quaternion = aligned_rotation.as_quat()
     
-    # For acceleration: apply corresponding transformation
-    # Original [ax, ay, az] -> [-ax, az, ay]
-    aligned_acceleration = np.array([
-        -acceleration[0],  # -X (right to left)
-        acceleration[2],   # Z becomes Y (up)
-        acceleration[1]    # Y becomes Z (forward)
+    # Define the transformation that aligns coordinate systems
+    # Headphone (X:right, Y:forward, Z:up) → World (X:left, Y:up, Z:into screen)
+    align_transform = R.from_matrix([
+        [-1, 0, 0],   
+        [0, 0, 1],   
+        [0, -1, 0]     
     ])
     
-    return aligned_quaternion, aligned_acceleration
+    # Apply transformation to get rotation in world frame
+    world_rotation = align_transform * device_rotation * align_transform.inv()
+    world_quaternion = world_rotation.as_quat()
+    
+    # Transform acceleration for waveform display
+    world_acceleration = np.array([
+        -acceleration[0],  # X: right → left
+        acceleration[2],   # Z: up → up
+        acceleration[1]    # Y: forward → into screen
+    ])
+    
+    return world_quaternion, world_acceleration
 
 def preprocess_rokid_data(quaternion, acceleration):
     """
