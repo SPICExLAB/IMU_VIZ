@@ -51,47 +51,63 @@ def preprocess_phone_watch_data(quaternion, acceleration):
     align_transform = R.from_matrix([
         [-1, 0, 0],   # X: right → left
         [0, 1, 0],    # Y: up → up
-        [0, 0, -1]    # Z: toward → forward
+        [0, 0, -1]    # Z: toward → forward (negate)
     ])
     
     # Apply transformation to get rotation in world frame
     world_rotation = align_transform * device_rotation * align_transform.inv()
+    
+    # Extract Euler angles to correct rotation directions
+    euler = world_rotation.as_euler('xyz', degrees=True)
+    
+    # Correct rotation directions for X and Y axes
+    euler[0] = -euler[0]  # Invert X rotation direction
+    euler[1] = -euler[1]  # Invert Y rotation direction
+    
+    # Create new rotation from adjusted euler angles
+    world_rotation = R.from_euler('xyz', euler, degrees=True)
     world_quaternion = world_rotation.as_quat()
     
     # Transform acceleration to world frame
     world_acceleration = np.array([
         -acceleration[0],  # X: right → left
         acceleration[1],   # Y: up → up
-        -acceleration[2]   # Z: toward → forward
+        -acceleration[2]   # Z: toward → forward (negate)
     ])
     
     return world_quaternion, world_acceleration
 
 
 def preprocess_headphone_data(quaternion, acceleration):
-    """
-    Transform headphone quaternion to represent rotation in world frame.
-    """
     # Get current device rotation
     device_rotation = R.from_quat(quaternion)
     
-    # Define the transformation that aligns coordinate systems
-    # Headphone (X:right, Y:forward, Z:up) → World (X:left, Y:up, Z:into screen)
+    # Define the transformation that aligns coordinate systems with CORRECTED rotation directions
+    # Headphone (X:right, Y:forward, Z:up) → World (X:left, Y:up, Z:forward)
     align_transform = R.from_matrix([
-        [-1, 0, 0],   
-        [0, 0, 1],   
-        [0, 1, 0]     
+        [-1, 0, 0],   # X: right → left (negate)
+        [0, 0, 1],    # Z: up → up (map Z to Y)
+        [0, 1, 0]     # Y: forward → forward (map Y to Z)
     ])
     
-    # Apply transformation to get rotation in world frame
+    # NOTE: Ensure we're correctly handling the rotation direction
+    # Instead of align * device * align.inv(), use a different composition:
     world_rotation = align_transform * device_rotation * align_transform.inv()
+    
+    # Checking if we need to invert specific rotations
+    euler = world_rotation.as_euler('xyz', degrees=True)
+    euler[0] = -euler[0]  # Invert X rotation direction
+    euler[1] = -euler[1]  # Invert Y rotation direction if needed
+    
+    # Create new rotation from adjusted euler angles
+    world_rotation = R.from_euler('xyz', euler, degrees=True)
     world_quaternion = world_rotation.as_quat()
     
-    # Transform acceleration for waveform display
+    # Transform acceleration consistently
     world_acceleration = np.array([
         -acceleration[0],  # X: right → left
         acceleration[2],   # Z: up → up
-        acceleration[1]    # Y: forward → into screen
+        acceleration[1]    # Y: forward → forward
     ])
     
     return world_quaternion, world_acceleration
