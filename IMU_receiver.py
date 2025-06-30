@@ -233,8 +233,8 @@ class IMUReceiver:
                 'gyroscope': gyro
             }
             
-            # For headphones and glasses, use the pre-aligned data if available
-            if aligned_data is not None and device_id in ['headphone', 'glasses']:
+            # For all devices, use the pre-aligned data if available
+            if aligned_data is not None:
                 aligned_quat, aligned_accel = aligned_data
                 
                 # Store original and aligned data
@@ -250,7 +250,7 @@ class IMUReceiver:
                 # Store the aligned quaternion for calibration
                 self.current_orientations[device_id] = aligned_quat
             else:
-                # For phone/watch, use original data
+                # Fallback to original data if no alignment available
                 quat_for_calibration = device_quat
                 accel_for_processing = device_accel
                 
@@ -454,17 +454,16 @@ def main():
     print("=============================")
     print("IMU Receiver with Enhanced Calibration")
     print("=============================")
-    print("Device Coordinate Systems:")
-    print("  Phone/Watch:   X:right, Y:up, Z:toward (screen-based)")
-    print("  Headphone:     Pre-transformed to global frame")
-    print("  Rokid Glasses: Pre-transformed to global frame")
+    print("Device Positioning for Calibration:")
+    print("  All devices: Place vertically with screen/front facing you")
     print()
-    print("Global frame:    X:left, Y:up, Z:forward")
+    print("Global frame:    X:left, Y:up, Z:forward (into screen)")
+    print("Visualization:   All devices shown in global frame")
     print()
     print("Calibration:")
     print("  1. Select which device sets the reference frame")
-    print("  2. Calibrate all devices relative to this reference")
-    print("  3. Device visualization shows orientation relative to calibrated position")
+    print("  2. Position the device vertically with screen facing you")
+    print("  3. Calibrate all devices relative to this reference")
     print()
     print("External API: Available on port 9001")
     

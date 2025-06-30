@@ -57,7 +57,7 @@ class ReferencePanel:
             self.screen.blit(dir_text, (self.x + 120, y_pos))
     
     def _draw_reference_system(self):
-        """Draw the 3D reference coordinate system"""
+        """Draw the 3D reference coordinate system with clear Z-direction"""
         # Background circle
         pygame.draw.circle(self.screen, (30, 30, 40), self.ref_center, 55)
         pygame.draw.circle(self.screen, (100, 100, 120), self.ref_center, 55, 2)
@@ -76,7 +76,12 @@ class ReferencePanel:
             device_type='global'  # Special device type for global frame
         )
         
-        # Reference label
+        # Add explicit Z-direction indicator
+        z_label = self.font_manager.render_text("Z: into screen ↓", 'small', Colors.AXIS_Z)
+        z_rect = z_label.get_rect(center=(self.ref_center[0], self.ref_center[1] + 70))
+        self.screen.blit(z_label, z_rect)
+        
+        # Reference coordinate system explanation
         ref_title = self.font_manager.render_text("X:left, Y:up, Z:forward", 'small', Colors.TEXT)
-        ref_title_rect = ref_title.get_rect(center=(self.ref_center[0], self.ref_center[1] + 70))
+        ref_title_rect = ref_title.get_rect(center=(self.ref_center[0], self.ref_center[1] + 90))
         self.screen.blit(ref_title, ref_title_rect)

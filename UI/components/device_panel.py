@@ -118,8 +118,6 @@ class DevicePanel:
         if not is_calibrated and not is_selected_as_reference:
             self._draw_set_reference_button(x, y, w, h)
         
-        # REMOVE: No longer drawing coordinate system info text
-        
         # Calculate device size based on device type and box size
         if self.device_name == 'glasses':
             # AR Glasses - use appropriate scaling for horizontal glasses
@@ -138,6 +136,26 @@ class DevicePanel:
         if self.device_name == 'glasses':
             self._draw_glasses_info(device_data, x, y, w, h, gravity_enabled)
         
+        # Add Z-direction indicator if device is calibrated
+        if is_calibrated and 'quaternion' in device_data:
+            # Get the original Z-direction from the quaternion
+            try:
+                quaternion = device_data['quaternion']
+                rotation = R.from_quat(quaternion)
+                # Get the Z-axis direction in the global frame
+                z_axis = rotation.apply([0, 0, 1])
+                
+                # Determine if Z is pointing into or out of screen
+                z_direction = "Z→SCREEN" if z_axis[2] > 0 else "Z←SCREEN"
+                z_color = (100, 100, 255) if z_axis[2] > 0 else (100, 200, 255)
+                
+                # Draw Z-direction text
+                z_text = self.font_manager.render_text(z_direction, 'small', z_color)
+                z_rect = z_text.get_rect(centerx=self.center[0], y=y + 30)
+                self.screen.blit(z_text, z_rect)
+            except Exception as e:
+                pass
+            
       
     
     def _draw_set_reference_button(self, x, y, w, h):
@@ -288,59 +306,65 @@ class DevicePanel:
         self.screen.blit(tooltip_surface, (tooltip_x, tooltip_y))
     
     def _draw_3d_device(self, center, quaternion, color, device_size):
-        """Draw 3D device representation with correct calibration visualization"""
-        # Get device vertices
+        """Draw 3D device representation with correct rotation and Z-direction indicator"""
+        # Get device vertices (already in global frame)
         vertices = self.renderer.create_device_vertices(self.device_name, device_size)
         
-        # Apply quaternion rotation
-        # The quaternion already includes calibration transformations
+        # Apply quaternion rotation - this should match the axes rotation
         if quaternion is not None and np.linalg.norm(quaternion) > 0:
             try:
+                # Convert quaternion to rotation matrix
                 rotation = R.from_quat(quaternion)
+                # Apply rotation to vertices
                 vertices = rotation.apply(vertices)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Error rotating device: {e}")
         
-        # Project to 2D
-        projected = [self.renderer.orthographic_project(vertex, center, scale=1.5) 
-                    for vertex in vertices]
-        
-        # Define faces
+        # Define faces in a consistent order
         faces = [
             [0, 1, 2, 3],  # Bottom face
-            [4, 7, 6, 5],  # Top face
-            [0, 4, 5, 1],  # Front face
-            [2, 6, 7, 3],  # Back face
-            [0, 3, 7, 4],  # Left face
-            [1, 5, 6, 2]   # Right face
+            [4, 5, 6, 7],  # Top face
+            [0, 4, 7, 3],  # Left face
+            [1, 5, 6, 2],  # Right face
+            [0, 1, 5, 4],  # Back face
+            [3, 2, 6, 7]   # Front face
         ]
         
-        # Calculate face depths for proper ordering
+        # Project vertices to 2D screen coordinates
+        projected = []
+        for vertex in vertices:
+            # Apply consistent screen-space conversion
+            vertex_2d = self.renderer.orthographic_project(vertex, center, scale=1.5)
+            projected.append(vertex_2d)
+        
+        # Calculate face depths for proper rendering order
         face_depths = []
         for i, face in enumerate(faces):
             face_center = np.mean([vertices[j] for j in face], axis=0)
-            depth = face_center[2]
+            depth = face_center[2]  # Z coordinate is depth
             face_depths.append((depth, i, face))
         
         # Sort faces by depth (back to front)
         face_depths.sort(key=lambda x: x[0])
         
-        # Draw faces
+        # Draw faces in the correct order
         for depth, face_idx, face in face_depths:
             face_points = [projected[j] for j in face]
             
             # Calculate face color based on lighting
             face_normal = self.renderer.calculate_face_normal(vertices, face)
+            # Adjust lighting calculation to work with global frame
             light_intensity = max(0.3, abs(face_normal[2]))
             
             face_color = tuple(int(c * light_intensity) for c in color)
             
+            # Draw face
             try:
                 pygame.draw.polygon(self.screen, face_color, face_points)
                 pygame.draw.polygon(self.screen, tuple(min(255, c + 40) for c in face_color), 
                                 face_points, 2)
             except:
-                # Fallback to wireframe
+                # Fallback to wireframe if polygon fails
                 for i in range(len(face)):
                     start = face_points[i]
                     end = face_points[(i + 1) % len(face)]
@@ -371,6 +395,55 @@ class DevicePanel:
             is_calibrated=is_calibrated,
             is_reference=is_reference
         )
+        
+        # Add Z-direction visual aid
+        if quaternion is not None:
+            try:
+                # Get the Z-axis direction in the device's current orientation
+                rotation = R.from_quat(quaternion)
+                z_axis = rotation.apply([0, 0, 1])
+                
+                # Create a small indicator on the front/back face of the device
+                z_indicator_size = device_size * 0.2
+                
+                # Determine which face is most visible based on Z direction
+                if z_axis[2] > 0:  # Z pointing into screen
+                    # Front face - indicate with filled circle
+                    front_face_idx = 5  # Front face index in our faces array
+                    front_face = faces[front_face_idx]
+                    face_center = np.mean([vertices[j] for j in front_face], axis=0)
+                    face_center_2d = self.renderer.orthographic_project(face_center, center, scale=1.5)
+                    
+                    # Draw "into screen" indicator (filled circle with arrow)
+                    pygame.draw.circle(self.screen, (100, 100, 255), face_center_2d, int(z_indicator_size))
+                    # Draw arrow pointing inward
+                    arrow_points = [
+                        (face_center_2d[0], face_center_2d[1] - int(z_indicator_size*0.7)),
+                        (face_center_2d[0] - int(z_indicator_size*0.5), face_center_2d[1] + int(z_indicator_size*0.7)),
+                        (face_center_2d[0] + int(z_indicator_size*0.5), face_center_2d[1] + int(z_indicator_size*0.7))
+                    ]
+                    pygame.draw.polygon(self.screen, (200, 200, 255), arrow_points)
+                    
+                else:  # Z pointing out of screen
+                    # Back face - indicate with hollow circle
+                    back_face_idx = 4  # Back face index in our faces array
+                    back_face = faces[back_face_idx]
+                    face_center = np.mean([vertices[j] for j in back_face], axis=0)
+                    face_center_2d = self.renderer.orthographic_project(face_center, center, scale=1.5)
+                    
+                    # Draw "out of screen" indicator (hollow circle with dot)
+                    pygame.draw.circle(self.screen, (100, 200, 255), face_center_2d, int(z_indicator_size), 2)
+                    # Draw arrow pointing outward
+                    arrow_size = int(z_indicator_size * 0.7)
+                    pygame.draw.line(self.screen, (100, 200, 255),
+                                (face_center_2d[0], face_center_2d[1] - arrow_size),
+                                (face_center_2d[0], face_center_2d[1] + arrow_size), 2)
+                    pygame.draw.line(self.screen, (100, 200, 255),
+                                (face_center_2d[0] - arrow_size, face_center_2d[1]),
+                                (face_center_2d[0] + arrow_size, face_center_2d[1]), 2)
+            except Exception as e:
+                # Silently fail if we can't draw the Z indicator
+                pass
     
     def _draw_glasses_info(self, device_data, x, y, w, h, gravity_enabled):
         """Draw additional info specific to AR glasses"""

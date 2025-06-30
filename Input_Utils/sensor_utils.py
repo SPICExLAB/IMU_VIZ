@@ -37,31 +37,36 @@ class IMUData:
     euler: np.ndarray = None   # [nod, tilt, turn] for Rokid glasses
 
 
-# def preprocess_headphone_data(quaternion, acceleration):
-#     """
-#     Transform headphone data to align with global frame using proper rotation.
+def preprocess_phone_watch_data(quaternion, acceleration):
+    """
+    Transform phone/watch quaternion to represent rotation in world frame.
+    Phone/Watch frame: X:right, Y:up, Z:toward user (out of screen)
+    World frame: X:left, Y:up, Z:forward (into screen)
+    """
+    # Get current device rotation
+    device_rotation = R.from_quat(quaternion)
     
-#     Headphone device frame:
-#     - X: [1, 0, 0] - Right
-#     - Y: [0, -1, 0] - Forward (into screen)
-#     - Z: [0, 0, 1] - Up
+    # Define the transformation that aligns coordinate systems
+    # Phone/Watch (X:right, Y:up, Z:toward) → World (X:left, Y:up, Z:forward)
+    align_transform = R.from_matrix([
+        [-1, 0, 0],   # X: right → left
+        [0, 1, 0],    # Y: up → up
+        [0, 0, -1]    # Z: toward → forward
+    ])
     
-#     Global frame:
-#     - X: [-1, 0, 0] - Left
-#     - Y: [0, 1, 0] - Up
-#     - Z: [0, 0, -1] - Forward (into screen)
-#     """
-#     qx, qy, qz, qw = quaternion
-#     aligned_quaternion = np.array([-qx, -qz, -qy, qw])
+    # Apply transformation to get rotation in world frame
+    world_rotation = align_transform * device_rotation * align_transform.inv()
+    world_quaternion = world_rotation.as_quat()
     
-#     # Apply the same transformation to acceleration
-#     aligned_acceleration = np.array([
-#         -acceleration[0],  # Negated X (right to left)
-#         acceleration[2],   # Z becomes Y (up)
-#         acceleration[1]    # Y becomes Z (forward/into screen)
-#     ])
+    # Transform acceleration to world frame
+    world_acceleration = np.array([
+        -acceleration[0],  # X: right → left
+        acceleration[1],   # Y: up → up
+        -acceleration[2]   # Z: toward → forward
+    ])
     
-#     return aligned_quaternion, aligned_acceleration
+    return world_quaternion, world_acceleration
+
 
 def preprocess_headphone_data(quaternion, acceleration):
     """
@@ -75,7 +80,7 @@ def preprocess_headphone_data(quaternion, acceleration):
     align_transform = R.from_matrix([
         [-1, 0, 0],   
         [0, 0, 1],   
-        [0, -1, 0]     
+        [0, 1, 0]     
     ])
     
     # Apply transformation to get rotation in world frame
@@ -127,14 +132,13 @@ def preprocess_rokid_data(quaternion, acceleration):
 
 def apply_calibration_transform(ori, acc, calibration_quats, device_id, reference_device=None):
     """
-    Apply calibration transformation to sensor data without unwanted rotations.
+    Apply calibration transformation to pre-transformed sensor data.
     
-    This assumes the user has physically aligned the device with the global frame
-    before calibration.
+    This function assumes the data is already pre-transformed to global frame.
     
     Args:
-        ori: np.ndarray - Device orientation quaternion [x, y, z, w]
-        acc: np.ndarray - Device acceleration [x, y, z]
+        ori: np.ndarray - Device orientation quaternion [x, y, z, w] in global frame
+        acc: np.ndarray - Device acceleration [x, y, z] in global frame
         calibration_quats: dict - Calibration quaternions by device_id
         device_id: str - Device identifier
         reference_device: str - Current reference device (optional)
@@ -146,19 +150,20 @@ def apply_calibration_transform(ori, acc, calibration_quats, device_id, referenc
     device_calib_quat = calibration_quats.get(device_id, np.array([0, 0, 0, 1]))
 
     # Convert quaternions to rotation matrices
-    device_rot = R.from_quat(ori).as_matrix()
-    calib_rot = R.from_quat(device_calib_quat).as_matrix()
+    device_rot = R.from_quat(ori)
+    calib_rot = R.from_quat(device_calib_quat)
     
     # Apply calibration to orientation - simply the inverse of calibration
     # This shows the device's movement relative to its calibration position
-    transformed_rot = calib_rot.T.dot(device_rot)
+    # Note: For quaternions, .inv() is the conjugate/inverse
+    transformed_rot = calib_rot.inv() * device_rot
+    transformed_quat = transformed_rot.as_quat()
     
     # Apply same transformation to acceleration
-    acc_local = device_rot.dot(acc)
-    transformed_acc = calib_rot.T.dot(acc_local)
-    
-    # Convert rotation matrix back to quaternion
-    transformed_quat = R.from_matrix(transformed_rot).as_quat()
+    # First rotate acceleration to device frame
+    acc_device = device_rot.apply(acc)
+    # Then apply calibration rotation
+    transformed_acc = calib_rot.inv().apply(acc_device)
     
     return transformed_quat, transformed_acc
 
@@ -167,8 +172,8 @@ def apply_mobileposer_calibration(current_orientations, reference_device=None):
     """
     Apply calibration with selectable reference device.
     
-    This function correctly handles the case where the phone/watch is
-    already physically aligned with the global frame (screen facing away).
+    This function handles pre-transformed quaternions that are already aligned
+    with the global coordinate system.
     
     Args:
         current_orientations: dict - Current device orientations {device_id: quaternion}
@@ -201,7 +206,6 @@ def apply_mobileposer_calibration(current_orientations, reference_device=None):
     ref_euler_initial = ref_rotation.as_euler('xyz', degrees=True)
     logger.info(f"INITIAL: Reference device ({reference_device}) orientation: "
                f"X={ref_euler_initial[0]:.1f}°, Y={ref_euler_initial[1]:.1f}°, Z={ref_euler_initial[2]:.1f}°")
-
     
     # Store calibration quaternions
     calibration_quats = {}
@@ -211,10 +215,12 @@ def apply_mobileposer_calibration(current_orientations, reference_device=None):
         curr_rotation = R.from_quat(curr_quat)
         
         if device_id == reference_device:
-            # Reference device gets its current orientation with potential Y-flip
-            calibration_quats[device_id] = ref_rotation.as_quat()
+            # For reference device, we use its current orientation as the reference
+            # No additional transformation needed since we're already in global frame
+            calibration_quats[device_id] = ref_quat
         else:
-            # Other devices get calibrated relative to the reference device
+            # For other devices, calculate the relative rotation to the reference device
+            # This is the inverse of the reference rotation composed with the current device rotation
             relative_rotation = ref_rotation.inv() * curr_rotation
             calibration_quats[device_id] = relative_rotation.as_quat()
     
@@ -268,7 +274,7 @@ def parse_phone_data(data_str):
         data_str: str - Raw data string from phone
         
     Returns:
-        tuple - (timestamp, device_quat, device_accel, gyro, euler)
+        tuple - (timestamp, device_quat, device_accel, gyro, aligned_data)
     """
     parts = data_str.split()
     if len(parts) < 11:
@@ -290,7 +296,40 @@ def parse_phone_data(data_str):
     # Phone doesn't send gyroscope data separately - set to zero
     gyro = np.array([0.0, 0.0, 0.0])
     
-    return timestamp, device_quat, device_accel, gyro, euler
+    # Pre-transform to world frame
+    aligned_quat, aligned_accel = preprocess_phone_watch_data(device_quat, device_accel)
+    aligned_data = (aligned_quat, aligned_accel)
+    
+    return timestamp, device_quat, device_accel, gyro, aligned_data
+
+# Update parse_watch_data to use the new preprocessing
+def parse_watch_data(data_str):
+    """
+    Parse Apple Watch data.
+    
+    Args:
+        data_str: str - Raw data string from watch
+        
+    Returns:
+        tuple - (timestamp, device_quat, device_accel, gyro, aligned_data)
+    """
+    parts = data_str.split()
+    if len(parts) < 12:
+        raise ValueError(f"Incomplete watch data: expected at least 12 parts, got {len(parts)}")
+        
+    timestamp = float(parts[0])
+    device_timestamp = float(parts[1])
+    
+    # Parse device-frame data
+    device_accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
+    device_quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
+    gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
+    
+    # Pre-transform to world frame
+    aligned_quat, aligned_accel = preprocess_phone_watch_data(device_quat, device_accel)
+    aligned_data = (aligned_quat, aligned_accel)
+    
+    return timestamp, device_quat, device_accel, gyro, aligned_data
 
 def parse_headphone_data(data_str):
     """
@@ -322,29 +361,7 @@ def parse_headphone_data(data_str):
     aligned_data = (aligned_quat, aligned_accel)
     
     return timestamp, device_quat, device_accel, gyro, aligned_data
-def parse_watch_data(data_str):
-    """
-    Parse Apple Watch data.
-    
-    Args:
-        data_str: str - Raw data string from watch
-        
-    Returns:
-        tuple - (timestamp, device_quat, device_accel, gyro, None)
-    """
-    parts = data_str.split()
-    if len(parts) < 12:
-        raise ValueError(f"Incomplete watch data: expected at least 12 parts, got {len(parts)}")
-        
-    timestamp = float(parts[0])
-    device_timestamp = float(parts[1])
-    
-    # Parse device-frame data
-    device_accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
-    device_quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
-    gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
-    
-    return timestamp, device_quat, device_accel, gyro, None
+
 
 def parse_rokid_glasses_data(data_str):
     """

@@ -23,48 +23,58 @@ class Renderer3D:
         self.screen = screen
     
     def orthographic_project(self, point_3d: np.ndarray, center: tuple, scale: float = 1.0) -> tuple:
-        """Orthographic projection (no perspective distortion)"""
+        """
+        Orthographic projection that consistently converts from global frame to screen space.
+        Global frame: X:left (+), Y:up (+), Z:forward (+)
+        Screen space: X:right (+), Y:down (+)
+        """
         x, y, z = point_3d
         
-        # Simple orthographic projection - just ignore Z for projection
-        screen_x = int(center[0] + x * scale)
-        screen_y = int(center[1] - y * scale)  # Flip Y for screen coordinates
+        # Convert from global frame to screen space - reverse the signs to flip directions
+        screen_x = int(center[0] - x * scale)  # Flip X (left → right)
+        screen_y = int(center[1] - y * scale)  # Flip Y (up → down)
         
         return screen_x, screen_y
     
     def create_device_vertices(self, device_type: str, size: float):
-        """Create device-specific 3D vertices"""
+        """
+        Create device-specific 3D vertices consistently in global coordinate system.
+        Global frame: X:left (+), Y:up (+), Z:forward (+)
+        """
         scale_x, scale_y, scale_z = self.DEVICE_SCALES.get(device_type, (0.5, 0.5, 0.5))
         
-        # Special handling for glasses to create a proper glasses shape
+        # Standard cuboid vertices in global frame
+        # Define faces consistently so rotation appears correct
+        vertices = np.array([
+            # Bottom face (Y-negative)
+            [scale_x, -scale_y, -scale_z],     # 0: left-bottom-back
+            [-scale_x, -scale_y, -scale_z],    # 1: right-bottom-back
+            [-scale_x, -scale_y, scale_z],     # 2: right-bottom-front
+            [scale_x, -scale_y, scale_z],      # 3: left-bottom-front
+            
+            # Top face (Y-positive)
+            [scale_x, scale_y, -scale_z],      # 4: left-top-back
+            [-scale_x, scale_y, -scale_z],     # 5: right-top-back
+            [-scale_x, scale_y, scale_z],      # 6: right-top-front
+            [scale_x, scale_y, scale_z]        # 7: left-top-front
+        ]) * size
+        
+        # Apply device-specific adjustments to better represent the shape
         if device_type == 'glasses':
-            # Create AR glasses shape with correct proportions
-            vertices = np.array([
-                # Bottom face (glasses frame bottom)
-                [-scale_x, -scale_y, -scale_z],    # 0: left-bottom-back
-                [scale_x, -scale_y, -scale_z],     # 1: right-bottom-back  
-                [scale_x, -scale_y, scale_z],      # 2: right-bottom-front
-                [-scale_x, -scale_y, scale_z],     # 3: left-bottom-front
-                # Top face (glasses frame top)
-                [-scale_x, scale_y, -scale_z],     # 4: left-top-back
-                [scale_x, scale_y, -scale_z],      # 5: right-top-back
-                [scale_x, scale_y, scale_z],       # 6: right-top-front
-                [-scale_x, scale_y, scale_z]       # 7: left-top-front
-            ]) * size
-        else:
-            # Standard rectangular device
-            vertices = np.array([
-                # Bottom face
-                [-scale_x, -scale_y, -scale_z],
-                [scale_x, -scale_y, -scale_z],
-                [scale_x, scale_y, -scale_z],
-                [-scale_x, scale_y, -scale_z],
-                # Top face  
-                [-scale_x, -scale_y, scale_z],
-                [scale_x, -scale_y, scale_z],
-                [scale_x, scale_y, scale_z],
-                [-scale_x, scale_y, scale_z]
-            ]) * size
+            # Make glasses wider in X, thinner in Z
+            adjustment = np.array([1.5, 1.0, 0.5])
+            vertices = vertices * adjustment
+        elif device_type == 'phone':
+            # Make phone taller in Y, thinner in Z
+            adjustment = np.array([1.0, 1.2, 0.4])
+            vertices = vertices * adjustment
+        elif device_type == 'watch':
+            # Make watch more square, thicker in Z
+            adjustment = np.array([1.0, 1.0, 0.6])
+            vertices = vertices * adjustment
+        elif device_type == 'headphone':
+            # Make headphones smaller overall
+            vertices = vertices * 0.8
         
         return vertices
     
@@ -88,8 +98,17 @@ class Renderer3D:
         
         return normal
     
-    def draw_arrow(self, center: tuple, direction: np.ndarray, color: tuple, length: float = 30):
-        """Draw simple line arrow"""
+    def draw_arrow(self, center, direction, color, length=30, z_direction_indicator=False):
+        """
+        Draw arrow with enhanced depth cues for Z-axis.
+        
+        Args:
+            center: Tuple of (x,y) center point
+            direction: np.ndarray of direction vector
+            color: Tuple of (r,g,b) color
+            length: Float length of arrow
+            z_direction_indicator: Boolean - add special indicator for Z direction
+        """
         # Normalize direction
         if np.linalg.norm(direction) == 0:
             return
@@ -99,17 +118,18 @@ class Renderer3D:
         # Calculate end point
         end_x = center[0] + direction[0] * length
         end_y = center[1] + direction[1] * length
-        end_point = (end_x, end_y)
+        end_point = (int(end_x), int(end_y))
         
-        # Draw main line
-        pygame.draw.line(self.screen, color, center, end_point, 3)
+        # Draw main line with increased thickness for visibility
+        line_thickness = 3
+        pygame.draw.line(self.screen, color, center, end_point, line_thickness)
         
         # Draw arrowhead
         # Calculate perpendicular vector for arrowhead
-        perp = np.array([-direction[1], direction[0], 0])  # 2D perpendicular
+        perp = np.array([-direction[1], direction[0]])  # 2D perpendicular
         
         # Arrowhead size
-        arrow_size = 8
+        arrow_size = 10
         
         # Calculate arrowhead points
         arrow_back = np.array([
@@ -118,109 +138,98 @@ class Renderer3D:
         ])
         
         # Two sides of arrowhead
-        arrow_left = arrow_back + perp[:2] * arrow_size * 0.5
-        arrow_right = arrow_back - perp[:2] * arrow_size * 0.5
+        arrow_left = arrow_back + perp * arrow_size * 0.5
+        arrow_right = arrow_back - perp * arrow_size * 0.5
         
         # Draw arrowhead
-        pygame.draw.line(self.screen, color, end_point, tuple(arrow_left.astype(int)), 3)
-        pygame.draw.line(self.screen, color, end_point, tuple(arrow_right.astype(int)), 3)
+        pygame.draw.line(self.screen, color, end_point, (int(arrow_left[0]), int(arrow_left[1])), line_thickness)
+        pygame.draw.line(self.screen, color, end_point, (int(arrow_right[0]), int(arrow_right[1])), line_thickness)
+        
+        # Special enhancement for Z-axis (if it's blue and z_direction_indicator is True)
+        if z_direction_indicator and color[2] > color[0] and color[2] > color[1]:
+            # Get the Z component of the original direction vector
+            z_component = direction[2]
+            
+            # Determine if Z is pointing into screen (positive) or out of screen (negative)
+            if z_component > 0:  # Z pointing into screen
+                # Draw a filled circle at arrow end (representing "going in")
+                pygame.draw.circle(self.screen, color, end_point, 6)
+                pygame.draw.circle(self.screen, (255, 255, 255), end_point, 2)  # White dot in center
+            else:  # Z pointing out of screen
+                # Draw a hollow circle (representing "coming out")
+                pygame.draw.circle(self.screen, color, end_point, 6, 2)
+                # Draw a cross inside
+                cross_size = 3
+                pygame.draw.line(self.screen, color, 
+                            (end_point[0] - cross_size, end_point[1] - cross_size),
+                            (end_point[0] + cross_size, end_point[1] + cross_size), 2)
+                pygame.draw.line(self.screen, color,
+                            (end_point[0] - cross_size, end_point[1] + cross_size),
+                            (end_point[0] + cross_size, end_point[1] - cross_size), 2)
     
     def draw_3d_axes(self, center, quaternion, axis_length=40, 
-                axes_directions=None, axis_colors=None, 
-                font_manager=None, device_type='phone', 
+                axis_colors=None, font_manager=None, device_type='phone', 
                 is_calibrated=False, is_reference=False):
         """
-        Draw 3D coordinate axes with consistent device-specific coordinate systems.
-        
-        This properly handles the global reference frame vs device local frames.
+        Draw 3D coordinate axes with enhanced Z-axis depth cues.
+        Global frame: X:left (+), Y:up (+), Z:forward (+)
         """
         # Use provided colors or defaults
         if axis_colors is None:
             axis_colors = [(255, 60, 60), (60, 255, 60), (60, 60, 255)]  # R, G, B
         
-        # If axes directions are provided, use them directly
-        if axes_directions is not None:
-            pass  # Use the pre-rotated directions
-        # Otherwise, define initial axes based on device type
-        else:
-            if device_type == 'global':
-                # Global reference frame always has fixed axes:
-                # X pointing left, Y pointing up, Z pointing forward (into screen)
-                axes_directions = np.array([
-                    [-1, 0, 0],   # X-axis (Red) - Left
-                    [0, 1, 0],    # Y-axis (Green) - Up
-                    [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
-                ])
-            elif device_type == 'headphone':
-                # For headphones, use the world frame axes
-                # The quaternion is already transformed to world frame in preprocessing
-                axes_directions = np.array([
-                    [-1, 0, 0],   # X-axis (Red) - Left
-                    [0, 1, 0],    # Y-axis (Green) - Up
-                    [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
-                ])
-            else:
-                # For phone/watch, use their native coordinate systems
-                if device_type == 'phone' or device_type == 'watch':
-                    # Phone/Watch: X-right, Y-up, Z-toward user
-                    axes_directions = np.array([
-                        [1, 0, 0],    # X-axis (Red) - Right
-                        [0, 1, 0],    # Y-axis (Green) - Up
-                        [0, 0, 1]     # Z-axis (Blue) - Toward user
-                    ])
-                    # IMPORTANT: For calibrated reference devices, show axes in global frame
-                    # This ensures the visualization matches the physical orientation
-                    if is_calibrated and is_reference:
-                        y_flip = R.from_euler('y', 180, degrees=True)
-                        axes_directions = y_flip.apply(axes_directions)
-                elif device_type == 'glasses':
-                    # AR Glasses: X-right, Y-up, Z-forward
-                    axes_directions = np.array([
-                        [1, 0, 0],    # X-axis (Red) - Right
-                        [0, 1, 0],    # Y-axis (Green) - Up
-                        [0, 0, -1]    # Z-axis (Blue) - Forward (into screen)
-                    ])
-                else:
-                    # Default to standard right-handed system
-                    axes_directions = np.array([
-                        [1, 0, 0],    # X-axis (Red)
-                        [0, 1, 0],    # Y-axis (Green)
-                        [0, 0, 1]     # Z-axis (Blue)
-                    ])
+        # Define the axes in global frame
+        axes_directions = np.array([
+            [1, 0, 0],    # X-axis - Left (+X)
+            [0, 1, 0],    # Y-axis - Up (+Y)
+            [0, 0, 1]     # Z-axis - Forward (+Z)
+        ])
         
-        # Apply quaternion rotation to the axes
-        # For headphones, this quaternion is already in world frame
-        # For other devices (except global), apply the rotation
-        if device_type != 'global' and quaternion is not None and np.linalg.norm(quaternion) > 0:
+        # Apply the quaternion rotation
+        if quaternion is not None and np.linalg.norm(quaternion) > 0:
             try:
                 rotation = R.from_quat(quaternion)
-                # Apply rotation to the axes
-                axes_directions = rotation.apply(axes_directions)
+                rotated_axes = rotation.apply(axes_directions)
             except Exception as e:
                 logger.error(f"Error rotating axes: {e}")
+                rotated_axes = axes_directions
+        else:
+            rotated_axes = axes_directions
         
-        # Get axis labels
+        # Axis labels with enhanced Z label
         axis_labels = ['X', 'Y', 'Z']
         
-        # Draw arrows
-        for i, (direction, color, label) in enumerate(zip(axes_directions, axis_colors, axis_labels)):
-            # For Y axis, flip the screen direction
-            screen_direction = direction.copy()
-            screen_direction[1] = -screen_direction[1]  # Flip Y for screen coordinates
+        # Draw each axis
+        for i, (direction, color, label) in enumerate(zip(rotated_axes, axis_colors, axis_labels)):
+            # Convert to screen space with consistent transformation
+            screen_direction = np.array([-direction[0], -direction[1], -direction[2]])
             
-            # Draw arrow
-            self.draw_arrow(center, screen_direction, color, length=axis_length)
+            # Store the original Z component for Z-axis indicator
+            original_z = direction[2]
             
-            # Draw label if font_manager provided
+            # Draw the arrow with Z-direction indicator for the Z-axis
+            is_z_axis = (i == 2)  # True for Z-axis
+            self.draw_arrow(center, screen_direction, color, length=axis_length, 
+                        z_direction_indicator=is_z_axis)
+            
+            # Draw enhanced label for Z-axis
             if font_manager:
-                # Calculate label position
                 label_pos = (
                     center[0] + screen_direction[0] * (axis_length + 15),
                     center[1] + screen_direction[1] * (axis_length + 15)
                 )
                 
-                label_text = font_manager.render_text(label, 'small', color)
+                # For Z-axis, add direction indicator to label
+                if is_z_axis:
+                    if original_z > 0:
+                        enhanced_label = f"{label} (in ↓)"
+                    else:
+                        enhanced_label = f"{label} (out ↑)"
+                    label_text = font_manager.render_text(enhanced_label, 'small', color)
+                else:
+                    label_text = font_manager.render_text(label, 'small', color)
                 
+                # Add background for better visibility
                 label_bg = pygame.Surface((label_text.get_width() + 4, label_text.get_height() + 4))
                 label_bg.fill((0, 0, 0))
                 label_bg.set_alpha(128)
