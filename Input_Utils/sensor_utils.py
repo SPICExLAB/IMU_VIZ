@@ -1,460 +1,325 @@
 """
-Input_Utils/sensor_utils.py - Enhanced coordinate transformations with parsing
-
-This module provides utilities for transforming IMU data with improved coordinate 
-handling, calibration support, and data parsing.
-
-Device coordinate systems:
-- Phone/Watch:   X: Right, Y: Up, Z: Toward user (out from screen, Backward)
-- Headphone:     X: Right, Y: Forward, Z: Up
-- Rokid Glasses: X: Right, Y: Up, Z: Forward
-
-Global coordinate system:
-- X: Left
-- Y: Up
-- Z: Forward
-
-Strategy:
-- Phone/Watch: Regular calibration with 180° Y-flip when needed
-- Headphone/Glasses: Pre-transform directly to global frame to simplify calibration
+Input_utils/sensor_utils.py - Refactored sensor data parsing and processing
+Clean separation of parsing methods for different device types
 """
 
 import numpy as np
-from scipy.spatial.transform import Rotation as R
+import time
 import logging
-from dataclasses import dataclass
+from scipy.spatial.transform import Rotation as R
+from typing import Dict, Optional, Tuple, Any
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class IMUData:
-    """IMU data structure for iOS devices and AR glasses"""
-    timestamp: float
-    device_id: str
-    accelerometer: np.ndarray  # [ax, ay, az] in m/s²
-    gyroscope: np.ndarray      # [gx, gy, gz] in rad/s
-    quaternion: np.ndarray     # [x, y, z, w] orientation
-    euler: np.ndarray = None   # [nod, tilt, turn] for Rokid glasses
 
-
-def preprocess_phone_watch_data(quaternion, acceleration):
-    """
-    Transform phone/watch quaternion to represent rotation in world frame.
-    Phone/Watch frame: X:right, Y:up, Z:toward user (out of screen)
-    World frame: X:left, Y:up, Z:forward (into screen)
-    """
-    # Get current device rotation
-    device_rotation = R.from_quat(quaternion)
+class SensorDataProcessor:
+    """Processes sensor data from different device types (iOS and AR glasses)"""
     
-    # Define the transformation that aligns coordinate systems
-    # Phone/Watch (X:right, Y:up, Z:toward) → World (X:left, Y:up, Z:forward)
-    align_transform = R.from_matrix([
-        [-1, 0, 0],   # X: right → left
-        [0, 1, 0],    # Y: up → up
-        [0, 0, -1]    # Z: toward → forward (negate)
-    ])
-    
-    # Apply transformation to get rotation in world frame
-    world_rotation = align_transform * device_rotation * align_transform.inv()
-    
-    # Extract Euler angles to correct rotation directions
-    euler = world_rotation.as_euler('xyz', degrees=True)
-    
-    # Correct rotation directions for X and Y axes
-    euler[0] = -euler[0]  # Invert X rotation direction
-    euler[1] = -euler[1]  # Invert Y rotation direction
-    
-    # Create new rotation from adjusted euler angles
-    world_rotation = R.from_euler('xyz', euler, degrees=True)
-    world_quaternion = world_rotation.as_quat()
-    
-    # Transform acceleration to world frame
-    world_acceleration = np.array([
-        -acceleration[0],  # X: right → left
-        acceleration[1],   # Y: up → up
-        -acceleration[2]   # Z: toward → forward (negate)
-    ])
-    
-    return world_quaternion, world_acceleration
-
-
-def preprocess_headphone_data(quaternion, acceleration):
-    # Get current device rotation
-    device_rotation = R.from_quat(quaternion)
-    
-    # Define the transformation that aligns coordinate systems with CORRECTED rotation directions
-    # Headphone (X:right, Y:forward, Z:up) → World (X:left, Y:up, Z:forward)
-    align_transform = R.from_matrix([
-        [-1, 0, 0],   # X: right → left (negate)
-        [0, 0, 1],    # Z: up → up (map Z to Y)
-        [0, 1, 0]     # Y: forward → forward (map Y to Z)
-    ])
-    
-    # NOTE: Ensure we're correctly handling the rotation direction
-    # Instead of align * device * align.inv(), use a different composition:
-    world_rotation = align_transform * device_rotation * align_transform.inv()
-    
-    # Checking if we need to invert specific rotations
-    euler = world_rotation.as_euler('xyz', degrees=True)
-    euler[0] = -euler[0]  # Invert X rotation direction
-    euler[1] = -euler[1]  # Invert Y rotation direction if needed
-    
-    # Create new rotation from adjusted euler angles
-    world_rotation = R.from_euler('xyz', euler, degrees=True)
-    world_quaternion = world_rotation.as_quat()
-    
-    # Transform acceleration consistently
-    world_acceleration = np.array([
-        -acceleration[0],  # X: right → left
-        acceleration[2],   # Z: up → up
-        acceleration[1]    # Y: forward → forward
-    ])
-    
-    return world_quaternion, world_acceleration
-
-def preprocess_rokid_data(quaternion, acceleration):
-    """
-    Preprocess Rokid glasses data to align DIRECTLY with global coordinate system.
-    
-    Rokid device frame:   X: Right, Y: Up, Z: Forward
-    Global frame:         X: Left,  Y: Up, Z: Forward
-    
-    Args:
-        quaternion: np.ndarray - Orientation quaternion [x, y, z, w]
-        acceleration: np.ndarray - Acceleration [x, y, z]
+    def __init__(self, use_ar_as_headphone: bool = True):
+        self.use_ar_as_headphone = use_ar_as_headphone
         
-    Returns:
-        tuple of (aligned_quaternion, aligned_acceleration)
-    """
-    # Direct transformation to global frame:
-    # Simply flip X axis (right → left)
-    
-    # Create 180° rotation around Y axis
-    transform = R.from_euler('y', 180, degrees=True)
-    
-    # Apply to quaternion
-    device_rotation = R.from_quat(quaternion)
-    aligned_rotation = transform * device_rotation
-    aligned_quaternion = aligned_rotation.as_quat()
-    
-    # For acceleration: flip X
-    aligned_acceleration = np.array([
-        -acceleration[0],  # -X (right to left)
-        acceleration[1],   # Y stays the same (up)
-        acceleration[2]    # Z stays the same (forward)
-    ])
-    
-    return aligned_quaternion, aligned_acceleration
-
-def apply_calibration_transform(ori, acc, calibration_quats, device_id, reference_device=None):
-    """
-    Apply calibration transformation to pre-transformed sensor data.
-    
-    This function assumes the data is already pre-transformed to global frame.
-    
-    Args:
-        ori: np.ndarray - Device orientation quaternion [x, y, z, w] in global frame
-        acc: np.ndarray - Device acceleration [x, y, z] in global frame
-        calibration_quats: dict - Calibration quaternions by device_id
-        device_id: str - Device identifier
-        reference_device: str - Current reference device (optional)
+        # Device type mapping to indices for live_demo compatibility
+        self.device_indices = {
+            'phone': 0,
+            'watch': 1, 
+            'headphone': 2,  # AirPods
+            'glasses': 2     # AR Glasses (when use_ar_as_headphone=True)
+        }
         
-    Returns:
-        tuple of (transformed_orientation, transformed_acceleration)
-    """
-    # Get the calibration quaternion for this device
-    device_calib_quat = calibration_quats.get(device_id, np.array([0, 0, 0, 1]))
-
-    # Convert quaternions to rotation matrices
-    device_rot = R.from_quat(ori)
-    calib_rot = R.from_quat(device_calib_quat)
+        logger.info(f"SensorDataProcessor initialized with use_ar_as_headphone={use_ar_as_headphone}")
     
-    # Apply calibration to orientation - simply the inverse of calibration
-    # This shows the device's movement relative to its calibration position
-    # Note: For quaternions, .inv() is the conjugate/inverse
-    transformed_rot = calib_rot.inv() * device_rot
-    transformed_quat = transformed_rot.as_quat()
-    
-    # Apply same transformation to acceleration
-    # First rotate acceleration to device frame
-    acc_device = device_rot.apply(acc)
-    # Then apply calibration rotation
-    transformed_acc = calib_rot.inv().apply(acc_device)
-    
-    return transformed_quat, transformed_acc
-
-
-def apply_mobileposer_calibration(current_orientations, reference_device=None):
-    """
-    Apply calibration with selectable reference device.
-    
-    This function handles pre-transformed quaternions that are already aligned
-    with the global coordinate system.
-    
-    Args:
-        current_orientations: dict - Current device orientations {device_id: quaternion}
-        reference_device: str - Device to use as reference (default: auto-select)
+    def process_device_data(self, device_type: str, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Process raw device data and return standardized format
         
-    Returns:
-        tuple - (calibration_quats, reference_device)
-            calibration_quats: dict - Updated calibration quaternions
-            reference_device: str - The device used as reference
-    """
-    if not current_orientations:
-        return {}, None
-    
-    # Select reference device if not specified
-    if reference_device is None or reference_device not in current_orientations:
-        for device in ['phone', 'glasses', 'watch', 'headphone']:
-            if device in current_orientations:
-                reference_device = device
-                break
-        if reference_device is None:
-            reference_device = next(iter(current_orientations))
-    
-    logger.info(f"Calibrating using {reference_device} as reference device")
-    
-    # Get reference quaternion
-    ref_quat = current_orientations[reference_device]
-    ref_rotation = R.from_quat(ref_quat)
-    
-    # Log initial reference device orientation
-    ref_euler_initial = ref_rotation.as_euler('xyz', degrees=True)
-    logger.info(f"INITIAL: Reference device ({reference_device}) orientation: "
-               f"X={ref_euler_initial[0]:.1f}°, Y={ref_euler_initial[1]:.1f}°, Z={ref_euler_initial[2]:.1f}°")
-    
-    # Store calibration quaternions
-    calibration_quats = {}
-    
-    # For each device, calculate the calibration quaternion
-    for device_id, curr_quat in current_orientations.items():
-        curr_rotation = R.from_quat(curr_quat)
-        
-        if device_id == reference_device:
-            # For reference device, we use its current orientation as the reference
-            # No additional transformation needed since we're already in global frame
-            calibration_quats[device_id] = ref_quat
-        else:
-            # For other devices, calculate the relative rotation to the reference device
-            # This is the inverse of the reference rotation composed with the current device rotation
-            relative_rotation = ref_rotation.inv() * curr_rotation
-            calibration_quats[device_id] = relative_rotation.as_quat()
-    
-    # Log final calibration values
-    for device_id, quat in calibration_quats.items():
+        Args:
+            device_type: 'ios' or 'ar_glasses'
+            raw_data: Raw data dictionary from socket receiver
+            
+        Returns:
+            Standardized sensor data dictionary or None if processing fails
+        """
         try:
-            calib_euler = R.from_quat(quat).as_euler('xyz', degrees=True)
-            logger.info(f"CALIBRATION: {device_id} orientation: "
-                      f"X={calib_euler[0]:.1f}°, Y={calib_euler[1]:.1f}°, Z={calib_euler[2]:.1f}°")
-        except:
-            logger.info(f"CALIBRATION: {device_id} quaternion: [{quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f}]")
+            if device_type == 'ios':
+                return self._process_ios_data(raw_data)
+            elif device_type == 'ar_glasses':
+                return self._process_ar_glasses_data(raw_data)
+            else:
+                logger.warning(f"Unknown device type: {device_type}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error processing {device_type} data: {e}")
+            return None
     
-    return calibration_quats, reference_device
-
-def apply_gravity_compensation(quaternion, acceleration, gravity_magnitude=9.81):
-    """
-    Remove gravity component from acceleration vector.
+    def _process_ios_data(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Process iOS device data (iPhone, Apple Watch, AirPods)"""
+        try:
+            # Extract basic info
+            device_name = raw_data['device_name'].lower()
+            timestamps = raw_data['timestamps']
+            accelerometer = np.array(raw_data['accelerometer'])
+            quaternion = np.array(raw_data['quaternion'])
+            gyroscope = raw_data.get('gyroscope', np.zeros(3))
+            
+            # Validate data
+            if len(accelerometer) != 3 or len(quaternion) != 4:
+                logger.warning(f"Invalid data dimensions for {device_name}")
+                return None
+            
+            # Get device index
+            device_id = self._get_device_index(device_name)
+            if device_id is None:
+                logger.warning(f"Unknown iOS device: {device_name}")
+                return None
+            
+            # Apply device-specific transformations
+            processed_acc, processed_quat = self._apply_ios_transformations(
+                device_name, accelerometer, quaternion
+            )
+            
+            # Calculate Euler angles
+            euler_angles = self._quaternion_to_euler(processed_quat)
+            
+            return {
+                'device_id': device_id,
+                'device_name': device_name,
+                'device_type': 'ios',
+                'timestamp': timestamps[0] if isinstance(timestamps, list) else timestamps,
+                'accelerometer': processed_acc,
+                'gyroscope': np.array(gyroscope),
+                'quaternion': processed_quat,
+                'raw_quaternion': quaternion,
+                'euler': euler_angles
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing iOS data: {e}")
+            return None
     
-    Args:
-        quaternion: np.ndarray - Orientation quaternion [x, y, z, w]
-        acceleration: np.ndarray - Acceleration [x, y, z]
-        gravity_magnitude: float - Magnitude of gravity
+    def _process_ar_glasses_data(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Process AR glasses data from Unity app"""
+        try:
+            # Extract data
+            timestamps = raw_data.get('timestamps', [time.time(), time.time()])
+            accelerometer = np.array(raw_data['accelerometer'])
+            quaternion = np.array(raw_data['quaternion'])
+            gyroscope = raw_data.get('gyroscope', np.zeros(3))
+            
+            # Validate data
+            if len(accelerometer) != 3 or len(quaternion) != 4:
+                logger.warning("Invalid AR glasses data dimensions")
+                return None
+            
+            # Determine device index based on use_ar_as_headphone flag
+            if self.use_ar_as_headphone:
+                device_id = self.device_indices['glasses']  # Index 2 (same as headphone)
+                device_name = 'headphone'  # Map to headphone for live_demo compatibility
+            else:
+                device_id = 4  # Separate index for AR glasses
+                device_name = 'glasses'
+            
+            # Apply AR glasses transformations 
+            processed_acc, processed_quat = self._apply_ar_glasses_transformations(
+                accelerometer, quaternion, remove_gravity=True
+            )
+            
+            # Calculate Euler angles
+            euler_angles = self._quaternion_to_euler(processed_quat)
+            
+            return {
+                'device_id': device_id,
+                'device_name': device_name,
+                'device_type': 'ar_glasses',
+                'timestamp': timestamps[0] if isinstance(timestamps, list) else timestamps,
+                'accelerometer': processed_acc,
+                'gyroscope': np.array(gyroscope),
+                'quaternion': processed_quat,
+                'raw_quaternion': quaternion,
+                'euler': euler_angles
+            }
+            
+        except Exception as e:
+            logger.error(f"Error processing AR glasses data: {e}")
+            return None
+    
+    def _get_device_index(self, device_name: str) -> Optional[int]:
+        """Get device index for live_demo compatibility"""
+        # Map device names to standard names
+        name_mapping = {
+            'phone': 'phone',
+            'iphone': 'phone',
+            'watch': 'watch',
+            'applewatch': 'watch',
+            'headphone': 'headphone',
+            'airpods': 'headphone',
+            'glasses': 'glasses',
+            'arglasses': 'glasses'
+        }
         
-    Returns:
-        np.ndarray - Linear acceleration with gravity removed
+        normalized_name = name_mapping.get(device_name.lower())
+        if normalized_name:
+            return self.device_indices.get(normalized_name)
+        
+        return None
+    
+    def _apply_ios_transformations(self, device_name: str, accelerometer: np.ndarray, 
+                                 quaternion: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Apply device-specific coordinate transformations for iOS devices"""
+        
+        # Copy arrays to avoid modifying originals
+        acc = accelerometer.copy()
+        quat = quaternion.copy()
+        
+        # Apply device-specific transformations
+        if device_name == 'headphone':
+            # AirPods coordinate frame adjustments
+            # Note: Removed the Unity bug fix comment as requested
+            euler = R.from_quat(quat).as_euler("xyz")
+            fixed_euler = np.array([euler[0] * -1, euler[2], euler[1]])
+            quat = R.from_euler("xyz", fixed_euler).as_quat()
+            acc = np.array([acc[0] * -1, acc[2], acc[1]])
+        
+        # Add other device-specific transformations as needed
+        # elif device_name == 'phone':
+        #     # Phone-specific transformations
+        #     pass
+        # elif device_name == 'watch':
+        #     # Watch-specific transformations
+        #     pass
+        
+        return acc, quat
+    
+    def _apply_ar_glasses_transformations(self, accelerometer: np.ndarray, quaternion: np.ndarray,
+                                        remove_gravity: bool = True) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Apply coordinate transformations for AR glasses
+        
+        AR Glasses frame: X:right, Y:forward, Z:up
+        Expected frame: X:right, Y:up, Z:away from user
+        """
+        # Copy arrays
+        acc = accelerometer.copy()
+        quat = quaternion.copy()
+        
+        # Apply coordinate transformation from AR glasses frame to expected frame
+        # Transform acceleration: [X:right, Y:forward, Z:up] -> [X:right, Y:up, Z:away]
+        transformed_acc = np.array([-acc[0], acc[2], acc[1]])
+        
+        # Remove gravity if requested
+        if remove_gravity:
+            try:
+                gravity_world = np.array([0, 0, 9.81])
+                rotation = R.from_quat(quat)
+                gravity_device = rotation.inv().apply(gravity_world)
+                transformed_acc = transformed_acc - gravity_device
+            except Exception as e:
+                logger.warning(f"Failed to remove gravity: {e}")
+        
+        # Quaternion should remain the same for now
+        # Additional quaternion transformations can be added here if needed
+        transformed_quat = quat
+        
+        return transformed_acc, transformed_quat
+    
+    def _quaternion_to_euler(self, quaternion: np.ndarray) -> np.ndarray:
+        """Convert quaternion to Euler angles (roll, pitch, yaw) in degrees"""
+        try:
+            rotation = R.from_quat(quaternion)
+            euler_rad = rotation.as_euler('xyz', degrees=False)
+            euler_deg = np.degrees(euler_rad)
+            return euler_deg
+        except Exception as e:
+            logger.warning(f"Failed to convert quaternion to Euler: {e}")
+            return np.array([0, 0, 0])
+
+
+
+
+def parse_ios_message(message: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse iOS sensor message format
+    Expected format: "device_id;device_type:timestamp1 timestamp2 ax ay az qx qy qz qw [gx gy gz]"
     """
     try:
-        # Define gravity in world frame (pointing down)
-        gravity_world = np.array([0, -gravity_magnitude, 0])
+        message = message.strip()
+        if not message or ';' not in message or ':' not in message:
+            return None
         
-        # Convert to device frame using inverse of orientation
-        rotation = R.from_quat(quaternion)
-        gravity_device_frame = rotation.inv().apply(gravity_world)
+        # Split device info and data
+        device_id_str, raw_data_str = message.split(";", 1)
+        device_type, data_str = raw_data_str.split(":", 1)
         
-        # Remove gravity from raw acceleration
-        linear_acceleration = acceleration - gravity_device_frame
+        # Parse numeric data
+        data_values = []
+        for value_str in data_str.strip().split():
+            try:
+                data_values.append(float(value_str))
+            except ValueError:
+                continue
         
-        return linear_acceleration
+        # Need at least 2 timestamps + 3 accel + 4 quat = 9 values
+        if len(data_values) < 9:
+            logger.warning(f"Insufficient data values: got {len(data_values)}, need at least 9")
+            return None
+        
+        # Extract data components
+        timestamps = data_values[:2]
+        accelerometer = data_values[2:5]
+        quaternion = data_values[5:9]
+        
+        # Extract gyroscope if available
+        gyroscope = data_values[9:12] if len(data_values) >= 12 else [0.0, 0.0, 0.0]
+        
+        return {
+            'device_id': device_id_str,
+            'device_name': device_type.lower(),
+            'timestamps': timestamps,
+            'accelerometer': accelerometer,
+            'quaternion': quaternion,
+            'gyroscope': gyroscope
+        }
         
     except Exception as e:
-        logger.error(f"Error in gravity compensation: {e}")
-        return acceleration
-
-# -------------------- Parsing Methods --------------------
-
-def parse_phone_data(data_str):
-    """
-    Parse phone data (screen-based device).
-    
-    Args:
-        data_str: str - Raw data string from phone
-        
-    Returns:
-        tuple - (timestamp, device_quat, device_accel, gyro, aligned_data)
-    """
-    parts = data_str.split()
-    if len(parts) < 11:
-        raise ValueError(f"Incomplete phone data: expected at least 11 parts, got {len(parts)}")
-        
-    timestamp = float(parts[0])
-    
-    # User acceleration (m/s²)
-    device_accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
-    
-    # Quaternion from iOS (x, y, z, w format)
-    device_quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
-    
-    # Euler angles if available
-    euler = None
-    if len(parts) >= 12:
-        euler = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
-    
-    # Phone doesn't send gyroscope data separately - set to zero
-    gyro = np.array([0.0, 0.0, 0.0])
-    
-    # Pre-transform to world frame
-    aligned_quat, aligned_accel = preprocess_phone_watch_data(device_quat, device_accel)
-    aligned_data = (aligned_quat, aligned_accel)
-    
-    return timestamp, device_quat, device_accel, gyro, aligned_data
-
-# Update parse_watch_data to use the new preprocessing
-def parse_watch_data(data_str):
-    """
-    Parse Apple Watch data.
-    
-    Args:
-        data_str: str - Raw data string from watch
-        
-    Returns:
-        tuple - (timestamp, device_quat, device_accel, gyro, aligned_data)
-    """
-    parts = data_str.split()
-    if len(parts) < 12:
-        raise ValueError(f"Incomplete watch data: expected at least 12 parts, got {len(parts)}")
-        
-    timestamp = float(parts[0])
-    device_timestamp = float(parts[1])
-    
-    # Parse device-frame data
-    device_accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
-    device_quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
-    gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
-    
-    # Pre-transform to world frame
-    aligned_quat, aligned_accel = preprocess_phone_watch_data(device_quat, device_accel)
-    aligned_data = (aligned_quat, aligned_accel)
-    
-    return timestamp, device_quat, device_accel, gyro, aligned_data
-
-def parse_headphone_data(data_str):
-    """
-    Parse headphone data.
-    
-    Args:
-        data_str: str - Raw data string from headphone
-        
-    Returns:
-        tuple - (timestamp, device_quat, device_accel, gyro, aligned_quat, aligned_accel)
-    """
-    parts = data_str.split()
-    if len(parts) < 9:
-        raise ValueError(f"Incomplete headphone data: expected at least 9 parts, got {len(parts)}")
-        
-    timestamp = float(parts[0])
-    
-    # Get device-frame data
-    device_accel = np.array([float(parts[2]), float(parts[3]), float(parts[4])])
-    device_quat = np.array([float(parts[5]), float(parts[6]), float(parts[7]), float(parts[8])])
-    
-    # AirPods don't typically send gyroscope data
-    gyro = np.array([0.0, 0.0, 0.0])
-    
-    # Preprocess headphone data to DIRECTLY match global frame
-    # This transforms: (X:right, Z:up, Y:forward) -> (X:left, Y:up, Z:forward)
-    aligned_quat, aligned_accel = preprocess_headphone_data(device_quat, device_accel)
-    
-    aligned_data = (aligned_quat, aligned_accel)
-    
-    return timestamp, device_quat, device_accel, gyro, aligned_data
+        logger.error(f"Error parsing iOS message: {e}")
+        return None
 
 
-def parse_rokid_glasses_data(data_str):
+def parse_ar_glasses_message(message: str) -> Optional[Dict[str, Any]]:
     """
-    Parse Rokid Glasses data.
-    
-    Args:
-        data_str: str - Raw data string from Rokid glasses
-        
-    Returns:
-        tuple - (timestamp, device_quat, device_accel, gyro, aligned_quat, aligned_accel)
-    """
-    parts = data_str.split()
-    if len(parts) != 12:
-        raise ValueError(f"Rokid Glasses data format error: expected 12 values, got {len(parts)}")
-        
-    # Parse Unity's format
-    timestamp = float(parts[0])
-    device_timestamp = float(parts[1])
-    
-    # Parse quaternion from Unity (x, y, z, w format)
-    device_quat = np.array([float(parts[2]), float(parts[3]), float(parts[4]), float(parts[5])])
-    
-    # Parse sensor data
-    device_accel = np.array([float(parts[6]), float(parts[7]), float(parts[8])])
-    gyro = np.array([float(parts[9]), float(parts[10]), float(parts[11])])
-    
-    # Preprocess Rokid data to DIRECTLY match global frame
-    aligned_quat, aligned_accel = preprocess_rokid_data(device_quat, device_accel)
-    
-    return timestamp, device_quat, device_accel, gyro, aligned_quat, aligned_accel
-
-def parse_ios_data(message):
-    """
-    Parse iOS device data message.
-    
-    Args:
-        message: str - Raw message from iOS device
-        
-    Returns:
-        tuple - (device_id, parsed_data)
-            parsed_data: tuple - Parsed device data (format depends on device type)
-    """
-    if not ';' in message:
-        raise ValueError("Invalid iOS data format: missing ';' separator")
-        
-    device_prefix, data_part = message.split(';', 1)
-    
-    if data_part.startswith('phone:'):
-        return 'phone', parse_phone_data(data_part[6:])
-    elif data_part.startswith('headphone:'):
-        return 'headphone', parse_headphone_data(data_part[10:])
-    elif data_part.startswith('watch:'):
-        return 'watch', parse_watch_data(data_part[6:])
-    else:
-        raise ValueError(f"Unknown iOS device type in message: {message}")
-
-def calculate_euler_from_quaternion(quaternion):
-    """
-    Calculate Euler angles from quaternion.
-    
-    Args:
-        quaternion: np.ndarray - Quaternion [x, y, z, w]
-        
-    Returns:
-        np.ndarray - Euler angles [nod, turn, tilt] in degrees
+    Parse AR glasses message format from Unity
+    Expected format: "timestamp device_timestamp qx qy qz qw ax ay az [gx gy gz]"
     """
     try:
-        rotation = R.from_quat(quaternion)
-        euler_rad = rotation.as_euler('xyz', degrees=False)
-        euler_deg = euler_rad * 180.0 / np.pi
+        parts = message.strip().split()
         
-        # Map to head movements: nod, turn, tilt
-        nod = euler_deg[0]    # X rotation = NOD (up/down)
-        turn = euler_deg[1]   # Y rotation = TURN (left/right)  
-        tilt = euler_deg[2]   # Z rotation = TILT (left/right tilt)
+        if len(parts) < 9:  # timestamp + device_timestamp + 4 quat + 3 accel
+            logger.warning(f"AR glasses data format error: expected at least 9 values, got {len(parts)}")
+            return None
         
-        return np.array([nod, turn, tilt])
+        # Parse components
+        timestamp = float(parts[0])
+        device_timestamp = float(parts[1])
+        
+        # Quaternion (x, y, z, w format from Unity)
+        quaternion = [float(parts[i]) for i in range(2, 6)]
+        
+        # Acceleration
+        accelerometer = [float(parts[i]) for i in range(6, 9)]
+        
+        # Gyroscope if available
+        gyroscope = [0.0, 0.0, 0.0]
+        if len(parts) >= 12:
+            gyroscope = [float(parts[i]) for i in range(9, 12)]
+        
+        return {
+            'device_name': 'glasses',
+            'timestamps': [timestamp, device_timestamp],
+            'accelerometer': accelerometer,
+            'quaternion': quaternion,
+            'gyroscope': gyroscope
+        }
+        
     except Exception as e:
-        logger.warning(f"Error calculating Euler angles: {e}")
-        return np.array([0, 0, 0])
+        logger.error(f"Error parsing AR glasses message: {e}")
+        return None
