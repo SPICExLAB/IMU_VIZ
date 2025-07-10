@@ -1,0 +1,20 @@
+{
+  "name": "imu-3d-backend",
+  "version": "1.0.0",
+  "description": "Node.js WebSocket server for IMU data visualization",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": ["imu", "websocket", "3d", "visualization"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.14.2",
+    "mathjs": "^12.2.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
