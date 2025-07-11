@@ -84,7 +84,25 @@ function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams })
   
   // Check if we have calibration and world frame data
   const isCalibrated = !!calibrationParams?.isCalibrated;
-  const hasWorldFrame = !!device.worldFrameQuaternion;
+  
+  // More explicit check for world frame data - with fallback condition
+  const hasWorldFrameQuaternion = device.worldFrameQuaternion !== undefined;
+  const hasWorldFrameAccelerometer = device.worldFrameAccelerometer !== undefined;
+  const hasWorldFrameEuler = device.worldFrameEuler !== undefined;
+  
+  const hasWorldFrame = isCalibrated && (hasWorldFrameQuaternion || hasWorldFrameAccelerometer || hasWorldFrameEuler);
+
+  // Debug world frame data detection
+  console.log(`Device ${deviceKey} world frame data detection:`, {
+    isCalibrated,
+    hasWorldFrameQuaternion,
+    hasWorldFrameAccelerometer,
+    hasWorldFrameEuler,
+    hasWorldFrame,
+    worldFrameQuaternion: device.worldFrameQuaternion,
+    worldFrameAccelerometer: device.worldFrameAccelerometer,
+    worldFrameEuler: device.worldFrameEuler
+  });
 
   return (
     <div 
@@ -126,19 +144,17 @@ function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams })
           <span className="axis-z">Z: {device.accelerometer?.[2]?.toFixed(2) || '0.00'}</span>
         </div>
         
-        {/* Display raw waveform if no world frame data, or for AR glasses */}
-        {(!isCalibrated || isARGlasses) && (
-          <Waveform
-            data={device.accelerometerHistory}
-            dataKeys={['X', 'Y', 'Z']}
-            colors={['#ef4444', '#22c55e', '#3b82f6']}
-            height={100}
-          />
-        )}
+        {/* Display raw waveform */}
+        <Waveform
+          data={device.accelerometerHistory}
+          dataKeys={['X', 'Y', 'Z']}
+          colors={['#ef4444', '#22c55e', '#3b82f6']}
+          height={100}
+        />
       </div>
       
       {/* World Frame Acceleration Section */}
-      {isCalibrated && hasWorldFrame && (
+      {hasWorldFrame && hasWorldFrameAccelerometer && (
         <div className="sensor-section">
           <div className="sensor-header">
             <span className="sensor-title">World Frame Acceleration (m/s²)</span>
@@ -184,7 +200,7 @@ function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams })
       )}
       
       {/* World Frame Linear Acceleration Section (only for AR glasses with calibration) */}
-      {isARGlasses && isCalibrated && hasWorldFrame && device.worldFrameLinearAcceleration && (
+      {isARGlasses && hasWorldFrame && device.worldFrameLinearAcceleration && (
         <div className="sensor-section">
           <div className="sensor-header">
             <span className="sensor-title">Linear Acceleration (m/s²) - World Frame</span>
@@ -220,7 +236,7 @@ function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams })
       </div>
       
       {/* World Frame Rotation Section */}
-      {isCalibrated && hasWorldFrame && device.worldFrameEuler && (
+      {hasWorldFrame && hasWorldFrameEuler && (
         <div className="sensor-section">
           <div className="sensor-header">
             <span className="sensor-title">Rotation (°) - World Frame</span>

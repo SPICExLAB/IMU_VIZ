@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, Text, Box, Sphere, Cylinder } from '@react-three/drei';
+import { multiplyQuaternions }  from '../utils/mathUtils';
 
 // World Coordinate System Axes
 function CoordinateAxes({ position = [0, 0, -1], scale = 1 }) {
@@ -112,18 +113,20 @@ function RokidLocalFrame({ scale = 0.5 }) {
   );
 }
 
-// Device 3D Models
-function PhoneModel({ position, device, isSelected, onClick }) {
+// PhoneModel update
+function PhoneModel({ position, device, isSelected, onClick, calibrationParams }) {
   const meshRef = useRef();
   
   useFrame(() => {
-    if (meshRef.current && device?.quaternion) {
-      // Use calibrated quaternion if available, otherwise use default mapping
-      if (device.calibratedQuaternion) {
-        // When calibrated, the coordinates are already in world frame
-        const [x, y, z, w] = device.calibratedQuaternion;
+    if (meshRef.current && device) {
+      // Use world frame quaternion if available and calibration is active
+      if (calibrationParams?.isCalibrated && device.worldFrameQuaternion) {
+        const [x, y, z, w] = multiplyQuaternions(
+          device.worldFrameQuaternion,
+          calibrationParams.referencedWorldQuat
+        );
         meshRef.current.quaternion.set(x, y, z, w);
-      } else {
+      } else if (device.quaternion) {
         // Original mapping without calibration
         const [x, y, z, w] = device.quaternion;
         meshRef.current.quaternion.set(-x, z, y, w);
@@ -179,17 +182,20 @@ function PhoneModel({ position, device, isSelected, onClick }) {
   );
 }
 
-function WatchModel({ position, device, isSelected, onClick }) {
+// WatchModel update
+function WatchModel({ position, device, isSelected, onClick, calibrationParams }) {
   const meshRef = useRef();
   
   useFrame(() => {
-    if (meshRef.current && device?.quaternion) {
-      // Use calibrated quaternion if available, otherwise use default mapping
-      if (device.calibratedQuaternion) {
-        // When calibrated, the coordinates are already in world frame
-        const [x, y, z, w] = device.calibratedQuaternion;
+    if (meshRef.current && device) {
+      // Use world frame quaternion if available and calibration is active
+      if (calibrationParams?.isCalibrated && device.worldFrameQuaternion) {
+        const [x, y, z, w] = multiplyQuaternions(
+          device.worldFrameQuaternion,
+          calibrationParams.referencedWorldQuat
+        );
         meshRef.current.quaternion.set(x, y, z, w);
-      } else {
+      } else if (device.quaternion) {
         // Original mapping without calibration
         const [x, y, z, w] = device.quaternion;
         meshRef.current.quaternion.set(-x, z, y, w);
@@ -245,17 +251,20 @@ function WatchModel({ position, device, isSelected, onClick }) {
   );
 }
 
-function HeadphoneModel({ position, device, isSelected, onClick }) {
+// HeadphoneModel update
+function HeadphoneModel({ position, device, isSelected, onClick, calibrationParams }) {
   const meshRef = useRef();
 
   useFrame(() => {
-    if (meshRef.current && device?.quaternion) {
-      // Use calibrated quaternion if available, otherwise use default mapping
-      if (device.calibratedQuaternion) {
-        // When calibrated, the coordinates are already in world frame
-        const [x, y, z, w] = device.calibratedQuaternion;
+    if (meshRef.current && device) {
+      // Use world frame quaternion if available and calibration is active
+      if (calibrationParams?.isCalibrated && device.worldFrameQuaternion) {
+        const [x, y, z, w] = multiplyQuaternions(
+          device.worldFrameQuaternion,
+          calibrationParams.referencedWorldQuat
+        );
         meshRef.current.quaternion.set(x, y, z, w);
-      } else {
+      } else if (device.quaternion) {
         // Original mapping without calibration
         const [x, y, z, w] = device.quaternion;
         meshRef.current.quaternion.set(x, z, -y, w);
@@ -330,7 +339,7 @@ function CameraController() {
 }
 
 // Main Scene Component
-function Scene({ devices, selectedDevice, onDeviceSelect }) {
+function Scene({ devices, selectedDevice, onDeviceSelect, calibrationParams }) {
   const [showAxes] = useState(true);
 
   const activeDevices = Object.values(devices).filter(device => device.isActive);
@@ -392,6 +401,7 @@ function Scene({ devices, selectedDevice, onDeviceSelect }) {
                 device={device}
                 isSelected={isSelected}
                 onClick={() => handleDeviceClick(deviceKey)}
+                calibrationParams={calibrationParams}
               />
             );
           
@@ -404,6 +414,7 @@ function Scene({ devices, selectedDevice, onDeviceSelect }) {
                 device={device}
                 isSelected={isSelected}
                 onClick={() => handleDeviceClick(deviceKey)}
+                calibrationParams={calibrationParams}
               />
             );
           
@@ -418,6 +429,7 @@ function Scene({ devices, selectedDevice, onDeviceSelect }) {
                 device={device}
                 isSelected={isSelected}
                 onClick={() => handleDeviceClick(deviceKey)}
+                calibrationParams={calibrationParams}
               />
             );
           

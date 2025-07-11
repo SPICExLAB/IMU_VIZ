@@ -1,109 +1,17 @@
+// Fix for CalibrationPanel.js to ensure the calibration is fully completed and applied
+
 import React, { useState, useRef, useEffect } from 'react';
+import { 
+  calculateAverageQuaternion, 
+  quaternionToRotationMatrix,
+  transposeMatrix,
+  identityQuaternion,
+  quaternionToEuler,
+  matrixMultiply,
+  matrixVectorMultiply,
+  rotationMatrixToQuaternion
+} from '../utils/mathUtils';
 import './CalibrationPanel.css';
-
-// Matrix/Quaternion utility functions
-const quaternionToRotationMatrix = (q) => {
-  const [x, y, z, w] = q;
-  
-  // Calculate components
-  const xx = x * x;
-  const xy = x * y;
-  const xz = x * z;
-  const xw = x * w;
-  
-  const yy = y * y;
-  const yz = y * z;
-  const yw = y * w;
-  
-  const zz = z * z;
-  const zw = z * w;
-  
-  // Create rotation matrix
-  return [
-    [1 - 2 * (yy + zz), 2 * (xy - zw), 2 * (xz + yw)],
-    [2 * (xy + zw), 1 - 2 * (xx + zz), 2 * (yz - xw)],
-    [2 * (xz - yw), 2 * (yz + xw), 1 - 2 * (xx + yy)]
-  ];
-};
-
-const rotationMatrixToQuaternion = (m) => {
-  // Extract rotation matrix components
-  const [
-    [m00, m01, m02],
-    [m10, m11, m12],
-    [m20, m21, m22]
-  ] = m;
-  
-  // Calculate trace
-  const trace = m00 + m11 + m22;
-  
-  let x, y, z, w;
-  
-  if (trace > 0) { 
-    const S = Math.sqrt(trace + 1.0) * 2;
-    w = 0.25 * S;
-    x = (m21 - m12) / S;
-    y = (m02 - m20) / S; 
-    z = (m10 - m01) / S; 
-  } else if ((m00 > m11) && (m00 > m22)) { 
-    const S = Math.sqrt(1.0 + m00 - m11 - m22) * 2;
-    w = (m21 - m12) / S;
-    x = 0.25 * S;
-    y = (m01 + m10) / S; 
-    z = (m02 + m20) / S;
-  } else if (m11 > m22) { 
-    const S = Math.sqrt(1.0 + m11 - m00 - m22) * 2;
-    w = (m02 - m20) / S;
-    x = (m01 + m10) / S; 
-    y = 0.25 * S;
-    z = (m12 + m21) / S;
-  } else { 
-    const S = Math.sqrt(1.0 + m22 - m00 - m11) * 2;
-    w = (m10 - m01) / S;
-    x = (m02 + m20) / S;
-    y = (m12 + m21) / S;
-    z = 0.25 * S;
-  }
-  
-  return [x, y, z, w];
-};
-
-const transposeMatrix = (m) => {
-  return [
-    [m[0][0], m[1][0], m[2][0]],
-    [m[0][1], m[1][1], m[2][1]],
-    [m[0][2], m[1][2], m[2][2]]
-  ];
-};
-
-const calculateAverageQuaternion = (quaternions) => {
-  if (quaternions.length === 0) return [0, 0, 0, 1];
-  
-  // Simple averaging for quaternions - for more accuracy, 
-  // you might want to use a more sophisticated approach
-  let sum = [0, 0, 0, 0];
-  
-  for (const q of quaternions) {
-    sum[0] += q[0];
-    sum[1] += q[1];
-    sum[2] += q[2];
-    sum[3] += q[3];
-  }
-  
-  const magnitude = Math.sqrt(
-    sum[0] * sum[0] + 
-    sum[1] * sum[1] + 
-    sum[2] * sum[2] + 
-    sum[3] * sum[3]
-  );
-  
-  return [
-    sum[0] / magnitude,
-    sum[1] / magnitude,
-    sum[2] / magnitude,
-    sum[3] / magnitude
-  ];
-};
 
 // Main CalibrationPanel Component
 const CalibrationPanel = ({ 
@@ -122,6 +30,7 @@ const CalibrationPanel = ({
   
   // Calibration data
   const [smpl2imu, setSmpl2imu] = useState(null);
+  const [refQuaternion, setRefQuaternion] = useState(null);
   
   // Collected samples
   const samplesRef = useRef([]);
@@ -151,6 +60,8 @@ const CalibrationPanel = ({
   const startWorldFrameCalibration = () => {
     if (!selectedDevice || worldFrameButtonState !== 'available') return;
     
+    console.log('Starting world frame calibration for device:', selectedDevice);
+    
     setCalibrationStep('worldFrame');
     setCountdown(3);
     samplesRef.current = [];
@@ -173,6 +84,8 @@ const CalibrationPanel = ({
     setCalibrationStep('inProgress');
     let sampleCount = 0;
     
+    console.log('Starting sample collection');
+    
     const sampleInterval = setInterval(() => {
       if (sampleCount >= samplesToCollect) {
         clearInterval(sampleInterval);
@@ -182,14 +95,22 @@ const CalibrationPanel = ({
       
       // Add current device data to samples
       if (devices[selectedDevice]) {
-        samplesRef.current.push({
-          quaternion: [...devices[selectedDevice].quaternion],
-          accelerometer: [...devices[selectedDevice].accelerometer]
-        });
+        const deviceData = devices[selectedDevice];
+        
+        if (deviceData.quaternion && deviceData.accelerometer) {
+          samplesRef.current.push({
+            quaternion: [...deviceData.quaternion],
+            accelerometer: [...deviceData.accelerometer]
+          });
+          
+          sampleCount++;
+          setProgress(sampleCount / samplesToCollect * 100);
+        } else {
+          console.warn('Missing quaternion or accelerometer data for sample', sampleCount);
+        }
+      } else {
+        console.warn('Selected device not found in devices list');
       }
-      
-      sampleCount++;
-      setProgress(sampleCount / samplesToCollect * 100);
     }, 1000 / samplingRate);
   };
   
@@ -198,36 +119,101 @@ const CalibrationPanel = ({
     // Calculate average quaternion and acceleration
     const samples = samplesRef.current;
     
+    console.log(`Processing ${samples.length} samples for calibration`);
+    
     if (samples.length === 0) {
+      console.error('No samples collected for calibration!');
       setCalibrationStep('idle');
       return;
     }
     
-    // Average quaternions from samples
-    const avgQuaternion = calculateAverageQuaternion(samples.map(s => s.quaternion));
-    
-    // Convert to rotation matrix
-    const rotationMatrix = quaternionToRotationMatrix(avgQuaternion);
-    
-    // Calculate smpl2imu as the transpose (inverse for rotation matrices)
-    const calculatedSmpl2imu = transposeMatrix(rotationMatrix);
-    
-    setSmpl2imu(calculatedSmpl2imu);
-    setCalibrationStep('complete');
-    
-    // Pass calibration results back to parent
-    onCalibrationComplete({
-      smpl2imu: calculatedSmpl2imu,
-      referenceDeviceId: selectedDevice,
-      isCalibrated: true
-    });
+    try {
+      // Average quaternions from samples
+      const avgQuaternion = calculateAverageQuaternion(samples.map(s => s.quaternion));
+      console.log('Average quaternion:', avgQuaternion);
+      
+      // Store this reference quaternion
+      setRefQuaternion(avgQuaternion);
+      
+      // Convert to rotation matrix
+      const rotationMatrix = quaternionToRotationMatrix(avgQuaternion);
+      console.log('Rotation matrix:', rotationMatrix);
+      
+      // Calculate smpl2imu as the transpose (inverse for rotation matrices)
+      const calculatedSmpl2imu = transposeMatrix(rotationMatrix);
+      console.log('smpl2imu matrix:', calculatedSmpl2imu);
+      
+      setSmpl2imu(calculatedSmpl2imu);
+      setCalibrationStep('complete');
+      
+      // Create the reference world quaternion
+      const referenceWorldQuat = identityQuaternion();
+      
+      // Debug: Test the calibration matrix with a sample
+      const testSample = samples[0];
+      if (testSample) {
+        const { quaternion, accelerometer } = testSample;
+        console.log('Testing calibration with sample:', { quaternion, accelerometer });
+        
+        // Convert quaternion to rotation matrix
+        const rotMatrix = quaternionToRotationMatrix(quaternion);
+        
+        // Apply smpl2imu transformation
+        const worldRotMatrix = matrixMultiply(calculatedSmpl2imu, rotMatrix);
+        
+        // Convert back to quaternion
+        const worldQuaternion = rotationMatrixToQuaternion(worldRotMatrix);
+        
+        // Apply transformation to acceleration
+        const worldAcceleration = matrixVectorMultiply(calculatedSmpl2imu, accelerometer);
+        
+        console.log('Test results:', {
+          worldQuaternion,
+          worldAcceleration,
+          worldEuler: quaternionToEuler(worldQuaternion)
+        });
+      }
+      
+      // Pass calibration results back to parent
+      const calibrationData = {
+        smpl2imu: calculatedSmpl2imu,
+        referenceDeviceId: selectedDevice,
+        referencedWorldQuat: referenceWorldQuat,
+        isCalibrated: true
+      };
+      
+      console.log('Calibration complete. Data:', calibrationData);
+      
+      if (onCalibrationComplete) {
+        onCalibrationComplete(calibrationData);
+      }
+      
+      // Immediate verification of calibration
+      setTimeout(() => {
+        if (devices[selectedDevice]) {
+          const device = devices[selectedDevice];
+          console.log('Verification check - device after calibration:', {
+            hasWorldFrame: !!device.worldFrameQuaternion,
+            worldFrameQuaternion: device.worldFrameQuaternion,
+            worldFrameAccelerometer: device.worldFrameAccelerometer
+          });
+        }
+      }, 500); // Short delay to allow state to update
+      
+    } catch (error) {
+      console.error('Error processing calibration samples:', error);
+      setCalibrationStep('idle');
+    }
   };
   
   // Reset calibration
   const resetCalibration = () => {
     setCalibrationStep('idle');
     setSmpl2imu(null);
+    setRefQuaternion(null);
     samplesRef.current = [];
+    
+    console.log('Calibration reset');
     
     if (onCalibrationReset) {
       onCalibrationReset();
@@ -291,8 +277,6 @@ const CalibrationPanel = ({
     }
     return null;
   };
-  
-  // No matrix display needed
   
   return (
     <div className="calibration-panel">

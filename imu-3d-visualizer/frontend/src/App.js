@@ -1,10 +1,15 @@
-// App.js - Final fixed implementation with proper naming and AR glasses handling
+// App.js - Refactored implementation with better math utility organization
 
 import React, { useState, useEffect, useRef } from 'react';
 import ThreeJSScene from './components/ThreeJSScene';
 import IMUOverlay from './components/IMUOverlay';
 import ConnectionStatus from './components/ConnectionStatus';
 import CalibrationPanel from './components/CalibrationPanel';
+import { 
+  quaternionToEuler, 
+  applyCalibrationToDevice,
+  matrixVectorMultiply
+} from './utils/mathUtils';
 import './App.css';
 
 const WEBSOCKET_URL = 'ws://localhost:3001';
@@ -33,6 +38,7 @@ function App() {
   const [calibrationParams, setCalibrationParams] = useState({
     smpl2imu: null,
     referenceDeviceId: null,
+    referencedWorldQuat: null,
     isCalibrated: false
   });
 
@@ -123,290 +129,198 @@ function App() {
     }
   };
 
-  const handleIMUData = (message) => {
-    const { deviceType, data, clientIP } = message;
-    
-    if (!data || data.device_id === null || data.device_id === undefined) {
-      return;
+const handleIMUData = (message) => {
+  const { deviceType, data, clientIP } = message;
+  
+  if (!data || data.device_id === null || data.device_id === undefined) {
+    return;
+  }
+
+  const deviceKey = `${data.device_name}_${data.device_id}`;
+  const timestamp = Date.now();
+
+  // *** Critical fix: Apply calibration OUTSIDE of the setDevices call ***
+  // This ensures we're not relying on previous state for calibration calculation
+  let worldFrameData = null;
+  
+  // Check if calibration should be applied
+  if (calibrationParams.isCalibrated && calibrationParams.smpl2imu && data.quaternion && data.accelerometer) {
+    try {
+      // Calculate world frame data
+      worldFrameData = applyCalibrationToDevice(
+        data.quaternion,
+        data.accelerometer,
+        calibrationParams.smpl2imu
+      );
+      
+      console.log(`Applied calibration to device ${deviceKey} with result:`, 
+        worldFrameData ? 'success' : 'failed');
+    } catch (error) {
+      console.error(`Error applying calibration to device ${deviceKey}:`, error);
     }
+  }
 
-    const deviceKey = `${data.device_name}_${data.device_id}`;
-    const timestamp = Date.now();
+  // Now update device state with pre-calculated world frame data
+  setDevices(prevDevices => {
+    const currentDevice = prevDevices[deviceKey] || {
+      device_id: data.device_id,
+      device_name: data.device_name,
+      device_type: data.device_type || deviceType,
+      clientIP: clientIP,
+      isActive: true,
+      lastUpdate: timestamp,
+      sampleCount: 0,
+      frequency: 0,
+      accelerometerHistory: [],
+      linearAccelerationHistory: [],
+      gyroscopeHistory: [],
+      eulerHistory: [],
+      quaternionHistory: [],
+      worldFrameAccelerometerHistory: [],
+      worldFrameLinearAccelerationHistory: [],
+      worldFrameQuaternionHistory: [],
+      worldFrameEulerHistory: []
+    };
 
-    setDevices(prevDevices => {
-      const currentDevice = prevDevices[deviceKey] || {
-        device_id: data.device_id,
-        device_name: data.device_name,
-        device_type: data.device_type,
-        clientIP: clientIP,
-        isActive: true,
-        lastUpdate: timestamp,
-        sampleCount: 0,
-        frequency: 0,
-        accelerometerHistory: [],
-        linearAccelerationHistory: [],
-        gyroscopeHistory: [],
-        eulerHistory: [],
-        quaternionHistory: [],
-        worldFrameAccelerometerHistory: [],
-        worldFrameLinearAccelerationHistory: [],
-        worldFrameQuaternionHistory: []
-      };
-
-      // Update device data
-      const updatedDevice = {
-        ...currentDevice,
-        accelerometer: data.accelerometer,
-        quaternion: data.quaternion,
-        euler: data.euler,
-        has_gyro: !!data.has_gyro,
-        lastUpdate: timestamp,
-        sampleCount: currentDevice.sampleCount + 1,
-        isActive: true,
-        clientIP: clientIP
-      };
+    // Update device data
+    const updatedDevice = {
+      ...currentDevice,
+      accelerometer: data.accelerometer,
+      quaternion: data.quaternion,
+      euler: data.euler || quaternionToEuler(data.quaternion),
+      has_gyro: !!data.has_gyro,
+      lastUpdate: timestamp,
+      sampleCount: currentDevice.sampleCount + 1,
+      isActive: true,
+      clientIP: clientIP
+    };
+    
+    // Handle gyroscope data if available
+    if (data.has_gyro) {
+      updatedDevice.gyroscope = data.gyroscope || [0, 0, 0];
+    }
+    
+    // Handle linear acceleration data for AR glasses
+    if (data.linear_acceleration) {
+      updatedDevice.linear_acceleration = data.linear_acceleration;
+    }
+    
+    // Apply pre-calculated world frame data if available
+    if (worldFrameData) {
+      updatedDevice.worldFrameQuaternion = worldFrameData.quaternion;
+      updatedDevice.worldFrameAccelerometer = worldFrameData.acceleration;
+      updatedDevice.worldFrameEuler = quaternionToEuler(worldFrameData.quaternion);
       
-      // Handle gyroscope data if available
-      if (data.has_gyro) {
-        updatedDevice.gyroscope = data.gyroscope || [0, 0, 0];
-      }
-      
-      // Handle linear acceleration data for AR glasses
-      if (data.linear_acceleration) {
-        updatedDevice.linear_acceleration = data.linear_acceleration;
-      }
-      
-      // Apply calibration if available - process all incoming data
-      if (calibrationParams.isCalibrated && calibrationParams.smpl2imu) {
-        // Process regular acceleration
-        const calibratedData = applyCalibrationToDevice(
-          updatedDevice.quaternion, 
-          updatedDevice.accelerometer, 
-          calibrationParams.smpl2imu
-        );
-        
-        if (calibratedData) {
-          // Use "worldFrame" naming instead of "calibrated"
-          updatedDevice.worldFrameQuaternion = calibratedData.quaternion;
-          updatedDevice.worldFrameAccelerometer = calibratedData.acceleration;
-          updatedDevice.worldFrameEuler = quaternionToEuler(calibratedData.quaternion);
-        }
-        
-        // Also process linear acceleration for AR glasses
-        if (data.linear_acceleration) {
-          const linearAccelWorld = matrixVectorMultiply(
-            calibrationParams.smpl2imu, 
+      // Also process linear acceleration for AR glasses if available
+      if (data.linear_acceleration && calibrationParams.smpl2imu) {
+        try {
+          updatedDevice.worldFrameLinearAcceleration = matrixVectorMultiply(
+            calibrationParams.smpl2imu,
             updatedDevice.linear_acceleration
           );
-          
-          updatedDevice.worldFrameLinearAcceleration = linearAccelWorld;
+        } catch (error) {
+          console.error('Error calculating world frame linear acceleration:', error);
         }
       }
+      
+      // Add debug log to verify world frame data was applied
+      console.log(`World frame data applied to device ${deviceKey}:`, {
+        worldFrameQuaternion: updatedDevice.worldFrameQuaternion,
+        worldFrameAccelerometer: updatedDevice.worldFrameAccelerometer,
+        worldFrameEuler: updatedDevice.worldFrameEuler
+      });
+    }
 
-      // Add to history buffers (keep last 300 samples ~10 seconds at 30Hz)
-      const maxHistory = 300;
-      const addToHistory = (history, newData) => {
-        const updated = [...history, { timestamp, data: newData }];
-        return updated.slice(-maxHistory);
-      };
+    // Add to history buffers (keep last 300 samples ~10 seconds at 30Hz)
+    const maxHistory = 300;
+    const addToHistory = (history, newData) => {
+      if (!newData) return history || [];
+      const updated = [...(history || []), { timestamp, data: newData }];
+      return updated.slice(-maxHistory);
+    };
 
-      // Always track raw data
-      updatedDevice.accelerometerHistory = addToHistory(
-        currentDevice.accelerometerHistory, 
-        data.accelerometer
+    // Always track raw data
+    updatedDevice.accelerometerHistory = addToHistory(
+      currentDevice.accelerometerHistory, 
+      data.accelerometer
+    );
+    
+    updatedDevice.eulerHistory = addToHistory(
+      currentDevice.eulerHistory, 
+      data.euler || updatedDevice.euler
+    );
+    
+    updatedDevice.quaternionHistory = addToHistory(
+      currentDevice.quaternionHistory, 
+      data.quaternion
+    );
+    
+    // Track linear acceleration for AR glasses
+    if (data.linear_acceleration) {
+      updatedDevice.linearAccelerationHistory = addToHistory(
+        currentDevice.linearAccelerationHistory || [],
+        data.linear_acceleration
       );
-      
-      updatedDevice.eulerHistory = addToHistory(
-        currentDevice.eulerHistory, 
-        data.euler
+    }
+    
+    // Only add gyroscope data to history if the device has a gyroscope
+    if (data.has_gyro) {
+      updatedDevice.gyroscopeHistory = addToHistory(
+        currentDevice.gyroscopeHistory, 
+        data.gyroscope
       );
-      
-      updatedDevice.quaternionHistory = addToHistory(
-        currentDevice.quaternionHistory, 
-        data.quaternion
+    }
+    
+    // Track world frame data if available
+    if (updatedDevice.worldFrameAccelerometer) {
+      updatedDevice.worldFrameAccelerometerHistory = addToHistory(
+        currentDevice.worldFrameAccelerometerHistory || [],
+        updatedDevice.worldFrameAccelerometer
       );
-      
-      // Track linear acceleration for AR glasses
-      if (data.linear_acceleration) {
-        updatedDevice.linearAccelerationHistory = addToHistory(
-          currentDevice.linearAccelerationHistory || [],
-          data.linear_acceleration
-        );
-        
-        // Track world frame linear acceleration if available
-        if (updatedDevice.worldFrameLinearAcceleration) {
-          updatedDevice.worldFrameLinearAccelerationHistory = addToHistory(
-            currentDevice.worldFrameLinearAccelerationHistory || [],
-            updatedDevice.worldFrameLinearAcceleration
-          );
-        }
-      }
-      
-      // Track world frame data if available
-      if (updatedDevice.worldFrameAccelerometer) {
-        updatedDevice.worldFrameAccelerometerHistory = addToHistory(
-          currentDevice.worldFrameAccelerometerHistory || [],
-          updatedDevice.worldFrameAccelerometer
-        );
-      }
-      
-      if (updatedDevice.worldFrameQuaternion) {
-        updatedDevice.worldFrameQuaternionHistory = addToHistory(
-          currentDevice.worldFrameQuaternionHistory || [],
-          updatedDevice.worldFrameQuaternion
-        );
-      }
-      
-      // Only add gyroscope data to history if the device has a gyroscope
-      if (data.has_gyro) {
-        updatedDevice.gyroscopeHistory = addToHistory(
-          currentDevice.gyroscopeHistory, 
-          data.gyroscope
-        );
-      }
-
-      // Calculate frequency (approximate)
-      if (updatedDevice.sampleCount % 30 === 0) {
-        const timeSpan = timestamp - (updatedDevice.accelerometerHistory[0]?.timestamp || timestamp);
-        if (timeSpan > 0) {
-          updatedDevice.frequency = Math.round((updatedDevice.accelerometerHistory.length / timeSpan) * 1000);
-        }
-      }
-
-      return {
-        ...prevDevices,
-        [deviceKey]: updatedDevice
-      };
-    });
-
-    // Update stats
-    setStats(prevStats => ({
-      ...prevStats,
-      [deviceType]: (prevStats[deviceType] || 0) + 1
-    }));
-  };
-
-  // Convert quaternion to Euler angles in degrees
-  const quaternionToEuler = (quaternion) => {
-    const [x, y, z, w] = quaternion;
-    
-    // Roll (x-axis rotation)
-    const sinr_cosp = 2 * (w * x + y * z);
-    const cosr_cosp = 1 - 2 * (x * x + y * y);
-    const roll = Math.atan2(sinr_cosp, cosr_cosp) * 180 / Math.PI;
-
-    // Pitch (y-axis rotation)
-    const sinp = 2 * (w * y - z * x);
-    let pitch;
-    if (Math.abs(sinp) >= 1) {
-      pitch = Math.sign(sinp) * 90; // Use 90 degrees if out of range
-    } else {
-      pitch = Math.asin(sinp) * 180 / Math.PI;
-    }
-
-    // Yaw (z-axis rotation)
-    const siny_cosp = 2 * (w * z + x * y);
-    const cosy_cosp = 1 - 2 * (y * y + z * z);
-    const yaw = Math.atan2(siny_cosp, cosy_cosp) * 180 / Math.PI;
-
-    return [roll, pitch, yaw];
-  };
-
-  // Apply calibration to a device's data
-  const applyCalibrationToDevice = (quaternion, acceleration, smpl2imu) => {
-    try {
-      // Convert quaternion to rotation matrix
-      const rotMatrix = quaternionToRotationMatrix(quaternion);
-      
-      // Apply smpl2imu transformation
-      const worldRotMatrix = matrixMultiply(smpl2imu, rotMatrix);
-      
-      // Convert back to quaternion
-      const worldQuaternion = rotationMatrixToQuaternion(worldRotMatrix);
-      
-      // Apply transformation to acceleration
-      const worldAcceleration = matrixVectorMultiply(smpl2imu, acceleration);
-      
-      return {
-        quaternion: worldQuaternion,
-        acceleration: worldAcceleration
-      };
-    } catch (error) {
-      console.error('Error applying calibration:', error);
-      return null;
-    }
-  };
-
-  // Matrix/quaternion utility functions
-  const quaternionToRotationMatrix = (q) => {
-    const [x, y, z, w] = q;
-    
-    return [
-      [1 - 2 * (y*y + z*z), 2 * (x*y - w*z), 2 * (x*z + w*y)],
-      [2 * (x*y + w*z), 1 - 2 * (x*x + z*z), 2 * (y*z - w*x)],
-      [2 * (x*z - w*y), 2 * (y*z + w*x), 1 - 2 * (x*x + y*y)]
-    ];
-  };
-  
-  const rotationMatrixToQuaternion = (m) => {
-    const trace = m[0][0] + m[1][1] + m[2][2];
-    
-    if (trace > 0) {
-      const S = Math.sqrt(trace + 1.0) * 2;
-      return [
-        (m[2][1] - m[1][2]) / S,
-        (m[0][2] - m[2][0]) / S,
-        (m[1][0] - m[0][1]) / S,
-        0.25 * S
-      ];
-    } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
-      const S = Math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2;
-      return [
-        0.25 * S,
-        (m[0][1] + m[1][0]) / S,
-        (m[0][2] + m[2][0]) / S,
-        (m[2][1] - m[1][2]) / S
-      ];
-    } else if (m[1][1] > m[2][2]) {
-      const S = Math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2;
-      return [
-        (m[0][1] + m[1][0]) / S,
-        0.25 * S,
-        (m[1][2] + m[2][1]) / S,
-        (m[0][2] - m[2][0]) / S
-      ];
-    } else {
-      const S = Math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2;
-      return [
-        (m[0][2] + m[2][0]) / S,
-        (m[1][2] + m[2][1]) / S,
-        0.25 * S,
-        (m[1][0] - m[0][1]) / S
-      ];
-    }
-  };
-  
-  const matrixMultiply = (a, b) => {
-    const result = Array(3).fill().map(() => Array(3).fill(0));
-    
-    for (let i = 0; i < 3; i++) {
-      for (let j = 0; j < 3; j++) {
-        for (let k = 0; k < 3; k++) {
-          result[i][j] += a[i][k] * b[k][j];
-        }
-      }
     }
     
-    return result;
-  };
-  
-  const matrixVectorMultiply = (m, v) => {
-    return [
-      m[0][0] * v[0] + m[0][1] * v[1] + m[0][2] * v[2],
-      m[1][0] * v[0] + m[1][1] * v[1] + m[1][2] * v[2],
-      m[2][0] * v[0] + m[2][1] * v[1] + m[2][2] * v[2]
-    ];
-  };
+    if (updatedDevice.worldFrameQuaternion) {
+      updatedDevice.worldFrameQuaternionHistory = addToHistory(
+        currentDevice.worldFrameQuaternionHistory || [],
+        updatedDevice.worldFrameQuaternion
+      );
+    }
+    
+    if (updatedDevice.worldFrameEuler) {
+      updatedDevice.worldFrameEulerHistory = addToHistory(
+        currentDevice.worldFrameEulerHistory || [],
+        updatedDevice.worldFrameEuler
+      );
+    }
+    
+    // Track world frame linear acceleration if available
+    if (updatedDevice.worldFrameLinearAcceleration) {
+      updatedDevice.worldFrameLinearAccelerationHistory = addToHistory(
+        currentDevice.worldFrameLinearAccelerationHistory || [],
+        updatedDevice.worldFrameLinearAcceleration
+      );
+    }
+
+    // Calculate frequency (approximate)
+    if (updatedDevice.sampleCount % 30 === 0) {
+      const timeSpan = timestamp - (updatedDevice.accelerometerHistory[0]?.timestamp || timestamp);
+      if (timeSpan > 0) {
+        updatedDevice.frequency = Math.round((updatedDevice.accelerometerHistory.length / timeSpan) * 1000);
+      }
+    }
+
+    return {
+      ...prevDevices,
+      [deviceKey]: updatedDevice
+    };
+  });
+
+  // Update stats
+  setStats(prevStats => ({
+    ...prevStats,
+    [deviceType]: (prevStats[deviceType] || 0) + 1
+  }));
+};
 
   // Handle calibration completion
   const handleCalibrationComplete = (calibrationData) => {
@@ -419,6 +333,7 @@ function App() {
     setCalibrationParams({
       smpl2imu: null,
       referenceDeviceId: null,
+      referencedWorldQuat: null,
       isCalibrated: false
     });
     
