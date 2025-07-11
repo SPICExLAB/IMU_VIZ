@@ -57,6 +57,7 @@ class DataProcessor {
       const accelerometer = [...rawData.accelerometer]; // Copy array
       const quaternion = [...rawData.quaternion]; // Copy array
       const gyroscope = rawData.gyroscope || [0, 0, 0];
+      const hasGyro = !!rawData.has_gyro; // Get gyro availability flag
 
       // Get device index
       const deviceId = this.getDeviceIndex(deviceName);
@@ -80,6 +81,7 @@ class DataProcessor {
         timestamp: Array.isArray(rawData.timestamps) ? rawData.timestamps[0] : rawData.timestamps,
         accelerometer: processedAcc,
         gyroscope: [...gyroscope],
+        has_gyro: hasGyro, // Preserve gyro availability flag
         quaternion: processedQuat,
         raw_quaternion: [...quaternion],
         euler: eulerAngles,
@@ -99,6 +101,7 @@ class DataProcessor {
       const accelerometer = [...rawData.accelerometer];
       const quaternion = [...rawData.quaternion];
       const gyroscope = rawData.gyroscope || [0, 0, 0];
+      const hasGyro = !!rawData.has_gyro; // Get gyro availability flag
 
       // Determine device index based on useARAsHeadphone flag
       let deviceId, deviceName;
@@ -110,9 +113,9 @@ class DataProcessor {
         deviceName = 'glasses';
       }
 
-      // Apply AR glasses transformations
-      const { processedAcc, processedQuat } = this.applyARGlassesTransformations(
-        accelerometer, quaternion, true // removeGravity = true
+      // Apply AR glasses transformations - include both raw and linear acceleration
+      const { rawAcc, linearAcc, processedQuat } = this.applyARGlassesTransformations(
+        accelerometer, quaternion
       );
 
       // Calculate Euler angles
@@ -123,8 +126,10 @@ class DataProcessor {
         device_name: deviceName,
         device_type: 'ar_glasses',
         timestamp: Array.isArray(rawData.timestamps) ? rawData.timestamps[0] : rawData.timestamps,
-        accelerometer: processedAcc,
+        accelerometer: rawAcc, // Raw acceleration with coordinate transform
+        linear_acceleration: linearAcc, // Gravity-removed acceleration
         gyroscope: [...gyroscope],
+        has_gyro: hasGyro, // Preserve gyro availability flag
         quaternion: processedQuat,
         raw_quaternion: [...quaternion],
         euler: eulerAngles,
@@ -181,42 +186,50 @@ class DataProcessor {
 
 
 /**
-   * Apply coordinate transformations for AR glasses
+   * Apply coordinate transformations for AR glasses, returning both raw and linear acceleration
    * AR Glasses frame: X:right, Y:forward, Z:up
-
    */
-  applyARGlassesTransformations(accelerometer, quaternion, removeGravity = true) {
+  applyARGlassesTransformations(accelerometer, quaternion) {
     // Copy arrays
     let acc = [...accelerometer];
     const quat = [...quaternion];
 
-    let transformedAcc = [acc[0], acc[1], acc[2]];
+    // Transform raw acceleration with the coordinate system change
+    let transformedRawAcc = [-acc[0], acc[2], -acc[1]];
 
-    // Remove gravity if requested
-    if (removeGravity) {
-      try {
-        const gravityWorld = [0, 0, 9.81];
-        
-        // Create rotation matrix from quaternion to transform gravity to device frame
-        const rotationMatrix = this.quaternionToRotationMatrix(quat);
-        const rotationMatrixInv = this.transposeMatrix(rotationMatrix);
-        const gravityDevice = this.multiplyMatrixVector(rotationMatrixInv, gravityWorld);
-        
-        // Remove gravity from acceleration
-        transformedAcc[0] -= gravityDevice[0];
-        transformedAcc[1] -= gravityDevice[1];
-        transformedAcc[2] -= gravityDevice[2];
-      } catch (error) {
-        console.warn('Failed to remove gravity:', error);
-      }
+    // Calculate linear acceleration (gravity removed)
+    let linearAcc;
+    try {
+      const gravityWorld = [0, 0, 9.81];
+      
+      // Create rotation matrix from quaternion to transform gravity to device frame
+      const rotationMatrix = this.quaternionToRotationMatrix(quat);
+      const rotationMatrixInv = this.transposeMatrix(rotationMatrix);
+      const gravityDevice = this.multiplyMatrixVector(rotationMatrixInv, gravityWorld);
+      
+      // Remove gravity from acceleration
+      linearAcc = [
+        acc[0] - gravityDevice[0],
+        acc[1] - gravityDevice[1],
+        acc[2] - gravityDevice[2]
+      ];
+      
+      // Apply the same coordinate transformation to linear acceleration
+      linearAcc = [-linearAcc[0], linearAcc[2], -linearAcc[1]];
+    } catch (error) {
+      console.warn('Failed to calculate linear acceleration:', error);
+      // If gravity removal fails, use the raw transformed acceleration
+      linearAcc = [...transformedRawAcc];
     }
-
-    transformedAcc = [-transformedAcc[0], transformedAcc[2], -transformedAcc[1]]
 
     // Quaternion transformations can be added here if needed
     const transformedQuat = quat;
 
-    return { processedAcc: transformedAcc, processedQuat: transformedQuat };
+    return { 
+      rawAcc: transformedRawAcc,
+      linearAcc: linearAcc,
+      processedQuat: transformedQuat 
+    };
   }
 
   /**

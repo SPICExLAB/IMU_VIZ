@@ -1,0 +1,174 @@
+.sensor-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+  font-family: 'Courier New', monospace;
+}
+
+.axis-x { color: #ef4444; }
+.axis-y { color: #22c55e; }
+.axis-z { color: #3b82f6; }
+.axis-w { color: #a855f7; }
+.axis-roll { color: #ef4444; }
+.axis-pitch { color: #22c55e; }
+.axis-yaw { color: #3b82f6; }/* CalibrationPanel.css */
+
+.calibration-panel {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 50%;
+  background: rgba(31, 41, 55, 0.95);
+  border-radius: 12px;
+  border: 1px solid #374151;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.calibration-content {
+  padding: 16px;
+}
+
+.calibration-instruction {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #e5e7eb;
+  text-align: center;
+  margin-bottom: 12px;
+  min-height: 1.5rem;
+}
+
+.calibration-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+}
+
+.calibration-button {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.calibration-button.available {
+  background-color: #10b981;
+  color: #f9fafb;
+  border-color: #059669;
+}
+
+.calibration-button.available:hover {
+  background-color: #059669;
+}
+
+.calibration-button.disabled {
+  background-color: #4b5563;
+  color: #9ca3af;
+  border-color: #6b7280;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.calibration-button.done {
+  background-color: #1e40af;
+  color: #f9fafb;
+  border-color: #1e3a8a;
+}
+
+.calibration-button.reset {
+  background-color: #6b7280;
+  color: #f9fafb;
+  border-color: #4b5563;
+}
+
+.calibration-button.reset:hover {
+  background-color: #4b5563;
+}
+
+.calibration-button.reset:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.calibration-progress {
+  height: 4px;
+  background: #374151;
+  border-radius: 2px;
+  margin: 8px 0 16px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: #10b981;
+  transition: width 0.3s ease;
+}
+
+.calibration-matrix {
+  background: rgba(31, 41, 55, 0.5);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 15px;
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+.matrix-label {
+  color: #9ca3af;
+  margin-bottom: 5px;
+  font-size: 0.75rem;
+}
+
+.matrix-values {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.matrix-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.matrix-row span {
+  color: #e5e7eb;
+  width: 50px;
+  text-align: right;
+}
+
+/* Add to App.css or IMUOverlay.css */
+
+.calibration-status {
+  margin-left: 8px;
+  color: #10b981;
+  font-size: 0.85rem;
+}
+
+.calibrated-indicator {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.75rem;
+  color: #10b981;
+  margin-left: 8px;
+}
+
+@media (max-width: 768px) {
+  .calibration-panel {
+    width: 90%;
+  }
+  
+  .calibration-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+}

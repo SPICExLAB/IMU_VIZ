@@ -44,8 +44,6 @@ function CoordinateAxes({ position = [0, 0, -1], scale = 1 }) {
   );
 }
 
-
-
 // iPhone and iWatch Device Local Frame Axes (shows device coordinate system)
 function DeviceLocalFrame({ scale = 0.5 }) {
   return (
@@ -66,7 +64,6 @@ function DeviceLocalFrame({ scale = 0.5 }) {
         rotation={[Math.PI / 2, 0, 0]}
       >
          <meshBasicMaterial color="#22c55e" />
-       
       </Cylinder>
       
       {/* Device Z axis - Blue (Out of Screen, same as world Z color) */}
@@ -75,7 +72,6 @@ function DeviceLocalFrame({ scale = 0.5 }) {
         position={[0, scale / 2, 0]}
         rotation={[0, 0, 0]}
       >
-      
         <meshBasicMaterial color="#3b82f6" />
       </Cylinder>
     </group>
@@ -102,7 +98,6 @@ function RokidLocalFrame({ scale = 0.5 }) {
         rotation={[0, 0, 0]}
       >
          <meshBasicMaterial color="#22c55e" />
-       
       </Cylinder>
       
       {/* Device Z axis - Blue (Out of Screen, same as world Z color) */}
@@ -111,22 +106,28 @@ function RokidLocalFrame({ scale = 0.5 }) {
         position={[0, 0, -scale / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
       >
-      
         <meshBasicMaterial color="#3b82f6" />
       </Cylinder>
     </group>
   );
 }
 
-
 // Device 3D Models
-function PhoneModel({ position, rotation, quaternion, isSelected, onClick }) {
+function PhoneModel({ position, device, isSelected, onClick }) {
   const meshRef = useRef();
   
   useFrame(() => {
-    if (meshRef.current && quaternion) {
-      const [x, y, z, w] = quaternion;
-      meshRef.current.quaternion.set(-x, z, y, w);
+    if (meshRef.current && device?.quaternion) {
+      // Use calibrated quaternion if available, otherwise use default mapping
+      if (device.calibratedQuaternion) {
+        // When calibrated, the coordinates are already in world frame
+        const [x, y, z, w] = device.calibratedQuaternion;
+        meshRef.current.quaternion.set(x, y, z, w);
+      } else {
+        // Original mapping without calibration
+        const [x, y, z, w] = device.quaternion;
+        meshRef.current.quaternion.set(-x, z, y, w);
+      }
     }
   });
 
@@ -178,13 +179,21 @@ function PhoneModel({ position, rotation, quaternion, isSelected, onClick }) {
   );
 }
 
-function WatchModel({ position, rotation, quaternion, isSelected, onClick }) {
+function WatchModel({ position, device, isSelected, onClick }) {
   const meshRef = useRef();
   
   useFrame(() => {
-    if (meshRef.current && quaternion) {
-      const [x, y, z, w] = quaternion;
-      meshRef.current.quaternion.set(-x, z, y, w);
+    if (meshRef.current && device?.quaternion) {
+      // Use calibrated quaternion if available, otherwise use default mapping
+      if (device.calibratedQuaternion) {
+        // When calibrated, the coordinates are already in world frame
+        const [x, y, z, w] = device.calibratedQuaternion;
+        meshRef.current.quaternion.set(x, y, z, w);
+      } else {
+        // Original mapping without calibration
+        const [x, y, z, w] = device.quaternion;
+        meshRef.current.quaternion.set(-x, z, y, w);
+      }
     }
   });
 
@@ -236,25 +245,31 @@ function WatchModel({ position, rotation, quaternion, isSelected, onClick }) {
   );
 }
 
-function HeadphoneModel({ position, rotation, quaternion, isSelected, onClick, deviceName }) {
+function HeadphoneModel({ position, device, isSelected, onClick }) {
   const meshRef = useRef();
-  
+
   useFrame(() => {
-    if (meshRef.current && quaternion) {
-      const [x, y, z, w] = quaternion;
-      meshRef.current.quaternion.set(x, z, -y, w);
-       //meshRef.current.quaternion.set(1, 0, 0, 1);
+    if (meshRef.current && device?.quaternion) {
+      // Use calibrated quaternion if available, otherwise use default mapping
+      if (device.calibratedQuaternion) {
+        // When calibrated, the coordinates are already in world frame
+        const [x, y, z, w] = device.calibratedQuaternion;
+        meshRef.current.quaternion.set(x, y, z, w);
+      } else {
+        // Original mapping without calibration
+        const [x, y, z, w] = device.quaternion;
+        meshRef.current.quaternion.set(x, z, -y, w);
+      }
     }
   });
 
-  const isGlasses = deviceName === 'glasses' || deviceName === 'headphone';
+  const isGlasses = device.device_name === 'glasses' || device.device_name === 'headphone';
   const color = isSelected ? '#8b5cf6' : '#6b7280';
   const label = isGlasses ? 'AR Glasses' : 'AirPods';
 
   return (
-    <group position={position} onClick={onClick} >
-      <group ref={meshRef} >
-        
+    <group position={position} onClick={onClick}>
+      <group ref={meshRef}>
         {/* rougly a glass shape when in identity: x alignes world world x, y = world -y, z = world -z  */}
         {isGlasses && (
           <>
@@ -289,44 +304,6 @@ function HeadphoneModel({ position, rotation, quaternion, isSelected, onClick, d
   );
 }
 
-// Acceleration Vector Visualization
-function AccelerationVector({ device, scale = 1 }) {
-  if (!device.accelerometer || !device.isActive) return null;
-
-  const [x, y, z] = device.accelerometer;
-  const magnitude = Math.sqrt(x * x + y * y + z * z);
-  
-  if (magnitude < 0.1) return null; // Don't show very small vectors
-
-  const length = magnitude * scale;
-  const origin = getDevicePosition(device.device_name, device.device_id);
-
-  // Create simple arrow using cylinders and cones
-  return (
-    <group position={origin}>
-      <group rotation={[Math.atan2(z, x), Math.atan2(y, Math.sqrt(x * x + z * z)), 0]}>
-        {/* Arrow shaft */}
-        <Cylinder 
-          args={[0.02, 0.02, length, 8]}
-          position={[length / 2, 0, 0]}
-          rotation={[0, 0, Math.PI / 2]}
-        >
-          <meshBasicMaterial color="#ef4444" />
-        </Cylinder>
-        {/* Arrow head */}
-        <Cylinder 
-          args={[0, 0.08, 0.2, 8]}
-          position={[length, 0, 0]}
-          rotation={[0, 0, Math.PI / 2]}
-        >
-          <meshBasicMaterial color="#ef4444" />
-        </Cylinder>
-      </group>
-    </group>
-  );
-}
-
-
 // Helper function to get device position in 3D space
 function getDevicePosition(deviceName, deviceId) {
   const positions = {
@@ -354,7 +331,6 @@ function CameraController() {
 
 // Main Scene Component
 function Scene({ devices, selectedDevice, onDeviceSelect }) {
-  const [showAcceleration] = useState(true);
   const [showAxes] = useState(true);
 
   const activeDevices = Object.values(devices).filter(device => device.isActive);
@@ -413,7 +389,7 @@ function Scene({ devices, selectedDevice, onDeviceSelect }) {
               <PhoneModel
                 key={deviceKey}
                 position={position}
-                quaternion={device.quaternion}
+                device={device}
                 isSelected={isSelected}
                 onClick={() => handleDeviceClick(deviceKey)}
               />
@@ -425,7 +401,7 @@ function Scene({ devices, selectedDevice, onDeviceSelect }) {
               <WatchModel
                 key={deviceKey}
                 position={position}
-                quaternion={device.quaternion}
+                device={device}
                 isSelected={isSelected}
                 onClick={() => handleDeviceClick(deviceKey)}
               />
@@ -439,10 +415,9 @@ function Scene({ devices, selectedDevice, onDeviceSelect }) {
               <HeadphoneModel
                 key={deviceKey}
                 position={position}
-                quaternion={device.quaternion}
+                device={device}
                 isSelected={isSelected}
                 onClick={() => handleDeviceClick(deviceKey)}
-                deviceName={device.device_name}
               />
             );
           
@@ -461,22 +436,12 @@ function Scene({ devices, selectedDevice, onDeviceSelect }) {
             );
         }
       })}
-
-      {/* Acceleration Vectors */}
-      {showAcceleration && activeDevices.map(device => (
-        <AccelerationVector
-          key={`accel_${device.device_name}_${device.device_id}`}
-          device={device}
-          scale={0.5}
-        />
-      ))}
-      
     </>
   );
 }
 
 // Main ThreeJS Scene Component
-export default function ThreeJSScene({ devices, selectedDevice, onDeviceSelect }) {
+export default function ThreeJSScene({ devices, selectedDevice, onDeviceSelect, calibrationParams }) {
   return (
     <div style={{ width: '100%', height: '100%' }}>
       <Canvas
@@ -487,6 +452,7 @@ export default function ThreeJSScene({ devices, selectedDevice, onDeviceSelect }
           devices={devices}
           selectedDevice={selectedDevice}
           onDeviceSelect={onDeviceSelect}
+          calibrationParams={calibrationParams}
         />
       </Canvas>
     </div>

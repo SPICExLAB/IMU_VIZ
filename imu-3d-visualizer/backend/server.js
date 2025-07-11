@@ -9,6 +9,9 @@ class IMUWebSocketServer {
     this.clients = new Set();
     this.dataProcessor = new DataProcessor();
     
+    // Add device tracking for gyro capabilities
+    this.deviceCapabilities = {};
+    
     // Statistics
     this.stats = {
       ios: 0,
@@ -86,6 +89,26 @@ class IMUWebSocketServer {
         // Update statistics
         this.stats[deviceType]++;
         
+        // Track device capabilities for better reporting
+        const deviceIdentifier = `${processedData.device_name}-${clientIP}`;
+        
+        // Update device capabilities tracking
+        if (!this.deviceCapabilities[deviceIdentifier]) {
+          this.deviceCapabilities[deviceIdentifier] = {
+            device_name: processedData.device_name,
+            device_type: deviceType,
+            has_gyro: processedData.has_gyro,
+            client_ip: clientIP,
+            last_seen: new Date()
+          };
+          
+          // Log when we detect a new device
+          console.log(`📱 New device detected: ${processedData.device_name} from ${clientIP} (has_gyro: ${processedData.has_gyro ? 'YES' : 'NO'})`);
+        } else {
+          // Update last seen time
+          this.deviceCapabilities[deviceIdentifier].last_seen = new Date();
+        }
+        
         // Broadcast to all connected clients
         const message = JSON.stringify({
           type: 'imu_data',
@@ -149,6 +172,16 @@ class IMUWebSocketServer {
         console.log(`❓ Unknown: ${this.stats.unknown} packets`);
         console.log(`❌ Errors: ${this.stats.errors} packets`);
         console.log(`🌐 Connected clients: ${this.stats.clients}`);
+        
+        // Log device capabilities
+        if (Object.keys(this.deviceCapabilities).length > 0) {
+          console.log('\n📱 Device Capabilities:');
+          Object.values(this.deviceCapabilities).forEach(device => {
+            const lastSeenTime = new Date(device.last_seen).toLocaleTimeString();
+            console.log(`  - ${device.device_name} (${device.client_ip}): Gyroscope: ${device.has_gyro ? 'YES' : 'NO'} (Last seen: ${lastSeenTime})`);
+          });
+        }
+        
         console.log(`📊 Total packets: ${total}`);
         console.log('===============================\n');
       } else if (this.stats.clients > 0) {

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer } from 'recharts';
-import { Activity, Smartphone, Watch, Headphones, Glasses, Wifi, WifiOff } from 'lucide-react';
+import { Activity, Smartphone, Watch, Headphones, Glasses, Wifi, WifiOff, ArrowRight } from 'lucide-react';
 
 // Device Icon Component
 function DeviceIcon({ deviceName, className = "w-4 h-4" }) {
@@ -70,20 +70,21 @@ function Waveform({ data, dataKeys, colors, height = 100 }) {
   );
 }
 
-
 // Enhanced Device Card Component
-function EnhancedDeviceCard({ device, isSelected, onSelect }) {
+function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams }) {
   const deviceKey = `${device.device_name}_${device.device_id}`;
   const timeSinceUpdate = Date.now() - device.lastUpdate;
   const isOnline = timeSinceUpdate < 3000;
   
-  // Better gyroscope detection - check if device actually has meaningful gyro data
-  // iPhone typically doesn't have gyro, only accelerometer and magnetometer
-  const hasGyro = device.gyroscopeHistory && 
-    device.gyroscopeHistory.length > 10 && // Has some history
-    device.gyroscopeHistory.some(entry => 
-      entry.data && entry.data.some(val => Math.abs(val) > 0.01) // Any meaningful movement
-    );
+  // Use the has_gyro flag from the backend
+  const hasGyro = !!device.has_gyro;
+  
+  // Check if this is an AR glasses device (which will have linear_acceleration)
+  const isARGlasses = device.device_type === 'ar_glasses' && device.linear_acceleration;
+  
+  // Check if we have calibration and world frame data
+  const isCalibrated = !!calibrationParams?.isCalibrated;
+  const hasWorldFrame = !!device.worldFrameQuaternion;
 
   return (
     <div 
@@ -100,6 +101,8 @@ function EnhancedDeviceCard({ device, isSelected, onSelect }) {
             </span>
             <span className="device-meta">
               ID: {device.device_id} • IP: {device.clientIP} • {device.frequency}Hz
+              {hasGyro && <span> • Gyroscope Available</span>}
+              {isARGlasses && <span> • Linear Acc Available</span>}
             </span>
           </div>
         </div>
@@ -112,42 +115,133 @@ function EnhancedDeviceCard({ device, isSelected, onSelect }) {
         </div>
       </div>
 
-      {/* Acceleration Section */}
+      {/* Raw Acceleration Section */}
       <div className="sensor-section">
         <div className="sensor-header">
-          <span className="sensor-title">Acceleration (m/s²) - Raw Data</span>
+          <span className="sensor-title">Raw Acceleration (m/s²)</span>
         </div>
         <div className="sensor-values">
           <span className="axis-x">X: {device.accelerometer?.[0]?.toFixed(2) || '0.00'}</span>
           <span className="axis-y">Y: {device.accelerometer?.[1]?.toFixed(2) || '0.00'}</span>
           <span className="axis-z">Z: {device.accelerometer?.[2]?.toFixed(2) || '0.00'}</span>
         </div>
-        <Waveform
-          data={device.accelerometerHistory}
-          dataKeys={['X', 'Y', 'Z']}
-          colors={['#ef4444', '#22c55e', '#3b82f6']}
-          height={100}
-        />
+        
+        {/* Display raw waveform if no world frame data, or for AR glasses */}
+        {(!isCalibrated || isARGlasses) && (
+          <Waveform
+            data={device.accelerometerHistory}
+            dataKeys={['X', 'Y', 'Z']}
+            colors={['#ef4444', '#22c55e', '#3b82f6']}
+            height={100}
+          />
+        )}
       </div>
+      
+      {/* World Frame Acceleration Section */}
+      {isCalibrated && hasWorldFrame && (
+        <div className="sensor-section">
+          <div className="sensor-header">
+            <span className="sensor-title">World Frame Acceleration (m/s²)</span>
+            <span className="calibrated-indicator">
+              <ArrowRight size={12} color="#10b981" />
+              <span>World Frame</span>
+            </span>
+          </div>
+          <div className="sensor-values">
+            <span className="axis-x">X: {device.worldFrameAccelerometer?.[0]?.toFixed(2) || '0.00'}</span>
+            <span className="axis-y">Y: {device.worldFrameAccelerometer?.[1]?.toFixed(2) || '0.00'}</span>
+            <span className="axis-z">Z: {device.worldFrameAccelerometer?.[2]?.toFixed(2) || '0.00'}</span>
+          </div>
+          
+          {/* Display world frame acceleration waveform */}
+          <Waveform
+            data={device.worldFrameAccelerometerHistory || []}
+            dataKeys={['X', 'Y', 'Z']}
+            colors={['#ef4444', '#22c55e', '#3b82f6']}
+            height={100}
+          />
+        </div>
+      )}
 
-      {/* Rotation Section */}
+      {/* Linear Acceleration Section (only for AR glasses) */}
+      {isARGlasses && (
+        <div className="sensor-section">
+          <div className="sensor-header">
+            <span className="sensor-title">Linear Acceleration (m/s²) - Raw</span>
+          </div>
+          <div className="sensor-values">
+            <span className="axis-x">X: {device.linear_acceleration?.[0]?.toFixed(2) || '0.00'}</span>
+            <span className="axis-y">Y: {device.linear_acceleration?.[1]?.toFixed(2) || '0.00'}</span>
+            <span className="axis-z">Z: {device.linear_acceleration?.[2]?.toFixed(2) || '0.00'}</span>
+          </div>
+          <Waveform
+            data={device.linearAccelerationHistory || []}
+            dataKeys={['X', 'Y', 'Z']}
+            colors={['#ef4444', '#22c55e', '#3b82f6']}
+            height={100}
+          />
+        </div>
+      )}
+      
+      {/* World Frame Linear Acceleration Section (only for AR glasses with calibration) */}
+      {isARGlasses && isCalibrated && hasWorldFrame && device.worldFrameLinearAcceleration && (
+        <div className="sensor-section">
+          <div className="sensor-header">
+            <span className="sensor-title">Linear Acceleration (m/s²) - World Frame</span>
+            <span className="calibrated-indicator">
+              <ArrowRight size={12} color="#10b981" />
+              <span>World Frame</span>
+            </span>
+          </div>
+          <div className="sensor-values">
+            <span className="axis-x">X: {device.worldFrameLinearAcceleration?.[0]?.toFixed(2) || '0.00'}</span>
+            <span className="axis-y">Y: {device.worldFrameLinearAcceleration?.[1]?.toFixed(2) || '0.00'}</span>
+            <span className="axis-z">Z: {device.worldFrameLinearAcceleration?.[2]?.toFixed(2) || '0.00'}</span>
+          </div>
+          <Waveform
+            data={device.worldFrameLinearAccelerationHistory || []}
+            dataKeys={['X', 'Y', 'Z']}
+            colors={['#ef4444', '#22c55e', '#3b82f6']}
+            height={100}
+          />
+        </div>
+      )}
+
+      {/* Raw Rotation Section */}
       <div className="sensor-section">
         <div className="sensor-header">
-          <span className="sensor-title">Rotation (°) - Raw Data</span>
+          <span className="sensor-title">Rotation (°) - Raw</span>
         </div>
         <div className="sensor-values">
           <span className="axis-roll">Roll: {device.euler?.[0]?.toFixed(1) || '0.0'}</span>
           <span className="axis-pitch">Pitch: {device.euler?.[1]?.toFixed(1) || '0.0'}</span>
           <span className="axis-yaw">Yaw: {device.euler?.[2]?.toFixed(1) || '0.0'}</span>
         </div>
-       
       </div>
+      
+      {/* World Frame Rotation Section */}
+      {isCalibrated && hasWorldFrame && device.worldFrameEuler && (
+        <div className="sensor-section">
+          <div className="sensor-header">
+            <span className="sensor-title">Rotation (°) - World Frame</span>
+            <span className="calibrated-indicator">
+              <ArrowRight size={12} color="#10b981" />
+              <span>World Frame</span>
+            </span>
+          </div>
+          <div className="sensor-values">
+            <span className="axis-roll">Roll: {device.worldFrameEuler?.[0]?.toFixed(1) || '0.0'}</span>
+            <span className="axis-pitch">Pitch: {device.worldFrameEuler?.[1]?.toFixed(1) || '0.0'}</span>
+            <span className="axis-yaw">Yaw: {device.worldFrameEuler?.[2]?.toFixed(1) || '0.0'}</span>
+          </div>
+        </div>
+      )}
 
       {/* Gyroscope Section (only if device actually has gyroscope data) */}
       {hasGyro && (
         <div className="sensor-section">
           <div className="sensor-header">
-            <span className="sensor-title">Gyroscope (rad/s) - Raw Data</span>
+            <span className="sensor-title">Gyroscope (rad/s)</span>
           </div>
           <div className="sensor-values">
             <span className="axis-x">X: {device.gyroscope?.[0]?.toFixed(3) || '0.000'}</span>
@@ -172,9 +266,11 @@ export default function IMUOverlay({
   selectedDevice, 
   onDeviceSelect, 
   connectionStatus,
-  stats 
+  stats,
+  calibrationParams
 }) {
   const activeDevices = Object.values(devices).filter(device => device.isActive);
+  const isCalibrated = !!calibrationParams?.isCalibrated;
 
   return (
     <div className="imu-overlay">
@@ -188,6 +284,9 @@ export default function IMUOverlay({
              connectionStatus === 'reconnecting' ? 'Reconnecting...' : 
              'Disconnected'}
           </span>
+          {isCalibrated && (
+            <span className="calibration-status">• World Frame Calibrated</span>
+          )}
         </div>
       </div>
 
@@ -220,6 +319,7 @@ export default function IMUOverlay({
                     device={device}
                     isSelected={selectedDevice === deviceKey}
                     onSelect={onDeviceSelect}
+                    calibrationParams={calibrationParams}
                   />
                 );
               })}

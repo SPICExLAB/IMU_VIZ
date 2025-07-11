@@ -59,9 +59,19 @@ function parseIOSMessage(message) {
     const accelerometer = dataValues.slice(2, 5);
     const quaternion = dataValues.slice(5, 9);
     
-    // Extract gyroscope if available
-    const gyroscope = dataValues.length >= 12 ? 
-      dataValues.slice(9, 12) : [0.0, 0.0, 0.0];
+    // Determine if device has gyroscope data - only Apple Watch sends real gyroscope data
+    // Apple Watch format: timestamp device_timestamp ax ay az qx qy qz qw gx gy gz
+    // iPhone format: timestamp device_timestamp ax ay az qx qy qz qw roll pitch yaw
+    // AirPods format: timestamp device_timestamp ax ay az qx qy qz qw
+    let hasGyro = false;
+    let gyroscope = [0.0, 0.0, 0.0];
+    
+    if (deviceType === 'watch' && dataValues.length >= 12) {
+      // Apple Watch has gyroscope data in positions 9-11
+      hasGyro = true;
+      gyroscope = dataValues.slice(9, 12);
+    }
+    // For iPhone and AirPods, we'll keep the default values (zeros and hasGyro=false)
 
     return {
       device_id: deviceIdStr,
@@ -70,6 +80,7 @@ function parseIOSMessage(message) {
       accelerometer: accelerometer,
       quaternion: quaternion,
       gyroscope: gyroscope,
+      has_gyro: hasGyro,
       raw_message: message
     };
 
@@ -128,9 +139,12 @@ function parseARGlassesMessage(message) {
       accelerometer.push(value);
     }
 
+    // Determine if AR glasses have gyroscope data (need 12+ values)
+    const hasGyro = parts.length >= 12;
+    
     // Gyroscope if available
     const gyroscope = [0.0, 0.0, 0.0];
-    if (parts.length >= 12) {
+    if (hasGyro) {
       for (let i = 9; i < 12; i++) {
         const value = parseFloat(parts[i]);
         if (!isNaN(value)) {
@@ -145,6 +159,7 @@ function parseARGlassesMessage(message) {
       accelerometer: accelerometer,
       quaternion: quaternion,
       gyroscope: gyroscope,
+      has_gyro: hasGyro,
       raw_message: message
     };
 
@@ -177,13 +192,23 @@ function validateSensorData(data) {
     console.warn('Invalid quaternion data length');
     return false;
   }
+  
+  // Check gyroscope if marked as available
+  if (data.has_gyro && (!data.gyroscope || data.gyroscope.length !== 3)) {
+    console.warn('Invalid gyroscope data length when gyroscope is marked as available');
+    return false;
+  }
 
   // Check for NaN or infinite values
   const allValues = [
     ...data.accelerometer,
-    ...data.quaternion,
-    ...(data.gyroscope || [])
+    ...data.quaternion
   ];
+
+  // Only check gyroscope values if gyroscope is available
+  if (data.has_gyro) {
+    allValues.push(...data.gyroscope);
+  }
 
   for (const value of allValues) {
     if (isNaN(value) || !isFinite(value)) {
@@ -232,6 +257,7 @@ function createStandardizedData(deviceType, rawData) {
     timestamp: Array.isArray(rawData.timestamps) ? rawData.timestamps[0] : rawData.timestamps,
     accelerometer: rawData.accelerometer,
     gyroscope: rawData.gyroscope || [0, 0, 0],
+    has_gyro: !!rawData.has_gyro,
     quaternion: rawData.quaternion,
     raw_quaternion: rawData.quaternion.slice(), // Copy
     timestamps: rawData.timestamps,
