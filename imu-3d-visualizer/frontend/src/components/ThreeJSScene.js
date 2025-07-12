@@ -1,7 +1,7 @@
+// ThreeJSScene.js - Updated with simplified quaternion handling
 import React, { useRef, useEffect, useState } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Grid, Text, Box, Sphere, Cylinder } from '@react-three/drei';
-import { multiplyQuaternions }  from '../utils/mathUtils';
 
 // World Coordinate System Axes
 function CoordinateAxes({ position = [0, 0, -1], scale = 1 }) {
@@ -45,11 +45,11 @@ function CoordinateAxes({ position = [0, 0, -1], scale = 1 }) {
   );
 }
 
-// iPhone and iWatch Device Local Frame Axes (shows device coordinate system)
+// Device Local Frame Axes (shows device coordinate system)
 function DeviceLocalFrame({ scale = 0.5 }) {
   return (
-    <group position={[0, 0.3, 0]}> {/* Raised above the device mesh */}
-      {/* Device X axis - Red (Screen Right, same as world X color) */}
+    <group position={[0, 0.3, 0]}>
+      {/* Device X axis - Red */}
       <Cylinder 
         args={[0.02, 0.02, scale, 6]}
         position={[-scale / 2, 0, 0]}
@@ -58,7 +58,7 @@ function DeviceLocalFrame({ scale = 0.5 }) {
         <meshBasicMaterial color="#ef4444" />
       </Cylinder>
       
-      {/* Device Y axis - Green (Screen Up, same as world Y color) */}
+      {/* Device Y axis - Green */}
       <Cylinder 
         args={[0.02, 0.02, scale, 6]}
         position={[0, 0, scale / 2]}
@@ -67,7 +67,7 @@ function DeviceLocalFrame({ scale = 0.5 }) {
          <meshBasicMaterial color="#22c55e" />
       </Cylinder>
       
-      {/* Device Z axis - Blue (Out of Screen, same as world Z color) */}
+      {/* Device Z axis - Blue */}
       <Cylinder 
         args={[0.02, 0.02, scale, 6]}
         position={[0, scale / 2, 0]}
@@ -79,55 +79,20 @@ function DeviceLocalFrame({ scale = 0.5 }) {
   );
 }
 
-// Rokid Local Frame Axes (shows device coordinate system)
-function RokidLocalFrame({ scale = 0.5 }) {
-  return (
-    <group position={[0, -0.3, -0.2]}> {/* Raised above the device mesh */}
-      {/* Device X axis - Red (Screen Right, same as world X color) */}
-      <Cylinder 
-        args={[0.02, 0.02, scale, 6]}
-        position={[scale / 2, 0, 0]}
-        rotation={[0, 0, Math.PI / 2]}
-      >
-        <meshBasicMaterial color="#ef4444" />
-      </Cylinder>
-      
-      {/* Device Y axis - Green (Screen Up, same as world Y color) */}
-      <Cylinder 
-        args={[0.02, 0.02, scale, 6]}
-        position={[0, -scale / 2, 0]}
-        rotation={[0, 0, 0]}
-      >
-         <meshBasicMaterial color="#22c55e" />
-      </Cylinder>
-      
-      {/* Device Z axis - Blue (Out of Screen, same as world Z color) */}
-      <Cylinder 
-        args={[0.02, 0.02, scale, 6]}
-        position={[0, 0, -scale / 2]}
-        rotation={[-Math.PI / 2, 0, 0]}
-      >
-        <meshBasicMaterial color="#3b82f6" />
-      </Cylinder>
-    </group>
-  );
-}
-
-// PhoneModel update
+// Phone Model
 function PhoneModel({ position, device, isSelected, onClick, calibrationParams }) {
   const meshRef = useRef();
   
   useFrame(() => {
     if (meshRef.current && device) {
-      // Use world frame quaternion if available and calibration is active
-      if (calibrationParams?.isCalibrated && device.worldFrameQuaternion) {
-        const [x, y, z, w] = multiplyQuaternions(
-          device.worldFrameQuaternion,
-          calibrationParams.referencedWorldQuat
-        );
+      // After calibration, use the world frame quaternion directly
+      if (calibrationParams?.isCalibrated && device.worldFrameQuatForViz) {
+        const [x, y, z, w] = device.worldFrameQuatForViz;
         meshRef.current.quaternion.set(x, y, z, w);
+      
       } else if (device.quaternion) {
-        // Original mapping without calibration
+        // Before calibration: apply device-specific transform
+        // Phone identity = laying flat, we need to rotate it for proper visualization
         const [x, y, z, w] = device.quaternion;
         meshRef.current.quaternion.set(-x, z, y, w);
       }
@@ -138,10 +103,7 @@ function PhoneModel({ position, device, isSelected, onClick, calibrationParams }
     <group position={position} onClick={onClick}>
       <group ref={meshRef}>
         {/* Phone body */}
-        <Box 
-          args={[1.4, 0.15, 2.8]} 
-          position={[0, 0, 0]}
-        >
+        <Box args={[1.4, 0.15, 2.8]} position={[0, 0, 0]}>
           <meshStandardMaterial 
             color={isSelected ? '#4ade80' : '#374151'} 
             roughness={0.4}
@@ -149,11 +111,8 @@ function PhoneModel({ position, device, isSelected, onClick, calibrationParams }
           />
         </Box>
         
-        {/* Screen (top face - white) */}
-        <Box 
-          args={[1.2, 0.02, 2.4]} 
-          position={[0, 0.09, 0]}
-        >
+        {/* Screen */}
+        <Box args={[1.2, 0.02, 2.4]} position={[0, 0.09, 0.2]}>
           <meshStandardMaterial 
             color="#AFBEDC"
             roughness={0.1}
@@ -163,11 +122,9 @@ function PhoneModel({ position, device, isSelected, onClick, calibrationParams }
           />
         </Box>
         
-        {/* Device Local Frame Axes - Child of rotating group, raised above mesh */}
         <DeviceLocalFrame scale={0.8} />
       </group>
       
-      {/* Device Label - Outside rotating group */}
       <Text
         rotation={[0, Math.PI, 0]}
         position={[0, -1.5, -2]}
@@ -182,21 +139,18 @@ function PhoneModel({ position, device, isSelected, onClick, calibrationParams }
   );
 }
 
-// WatchModel update
+// Simplified Watch Model
 function WatchModel({ position, device, isSelected, onClick, calibrationParams }) {
   const meshRef = useRef();
   
   useFrame(() => {
     if (meshRef.current && device) {
-      // Use world frame quaternion if available and calibration is active
-      if (calibrationParams?.isCalibrated && device.worldFrameQuaternion) {
-        const [x, y, z, w] = multiplyQuaternions(
-          device.worldFrameQuaternion,
-          calibrationParams.referencedWorldQuat
-        );
+      // After calibration, use the world frame quaternion directly
+      if (calibrationParams?.isCalibrated && device.worldFrameQuatForViz) {
+        const [x, y, z, w] = device.worldFrameQuatForViz;
         meshRef.current.quaternion.set(x, y, z, w);
       } else if (device.quaternion) {
-        // Original mapping without calibration
+        // Before calibration: apply device-specific transform
         const [x, y, z, w] = device.quaternion;
         meshRef.current.quaternion.set(-x, z, y, w);
       }
@@ -207,10 +161,7 @@ function WatchModel({ position, device, isSelected, onClick, calibrationParams }
     <group position={position} onClick={onClick}>
       <group ref={meshRef}>
         {/* Watch body */}
-        <Cylinder 
-          args={[0.6, 0.6, 0.3, 8]} 
-          position={[0, 0, 0]}
-        >
+        <Cylinder args={[0.6, 0.6, 0.3, 8]} position={[0, 0, 0]}>
           <meshStandardMaterial 
             color={isSelected ? '#f59e0b' : '#6b7280'} 
             roughness={0.3}
@@ -218,11 +169,8 @@ function WatchModel({ position, device, isSelected, onClick, calibrationParams }
           />
         </Cylinder>
         
-        {/* Watch screen (top face - white) */}
-        <Cylinder 
-          args={[0.5, 0.5, 0.02, 8]} 
-          position={[0, 0.16, 0]}
-        >
+        {/* Watch screen */}
+        <Cylinder args={[0.5, 0.5, 0.02, 8]} position={[0, 0.16, 0]}>
           <meshStandardMaterial 
             color="#f9fafb"
             roughness={0.1}
@@ -232,11 +180,9 @@ function WatchModel({ position, device, isSelected, onClick, calibrationParams }
           />
         </Cylinder>
         
-        {/* Device Local Frame Axes - Child of rotating group, raised above mesh */}
         <DeviceLocalFrame scale={0.6} />
       </group>
       
-      {/* Device Label - Outside rotating group */}
       <Text
         rotation={[0, Math.PI, 0]}
         position={[0, -1, 0]}
@@ -251,23 +197,20 @@ function WatchModel({ position, device, isSelected, onClick, calibrationParams }
   );
 }
 
-// HeadphoneModel update
+// Simplified Headphone/Glasses Model
 function HeadphoneModel({ position, device, isSelected, onClick, calibrationParams }) {
   const meshRef = useRef();
 
-  useFrame(() => {
+    useFrame(() => {
     if (meshRef.current && device) {
-      // Use world frame quaternion if available and calibration is active
-      if (calibrationParams?.isCalibrated && device.worldFrameQuaternion) {
-        const [x, y, z, w] = multiplyQuaternions(
-          device.worldFrameQuaternion,
-          calibrationParams.referencedWorldQuat
-        );
+      // After calibration, use the world frame quaternion directly
+      if (calibrationParams?.isCalibrated && device.worldFrameQuatForViz) {
+        const [x, y, z, w] = device.worldFrameQuatForViz;
         meshRef.current.quaternion.set(x, y, z, w);
       } else if (device.quaternion) {
-        // Original mapping without calibration
+        // Before calibration: apply device-specific transform
         const [x, y, z, w] = device.quaternion;
-        meshRef.current.quaternion.set(x, z, -y, w);
+        meshRef.current.quaternion.set(-x, z, y, w);
       }
     }
   });
@@ -279,26 +222,23 @@ function HeadphoneModel({ position, device, isSelected, onClick, calibrationPara
   return (
     <group position={position} onClick={onClick}>
       <group ref={meshRef}>
-        {/* rougly a glass shape when in identity: x alignes world world x, y = world -y, z = world -z  */}
         {isGlasses && (
           <>
-            <Box args={[1.5, 0.1, 0.1]} position={[0, -0.3, 0]}>
+            <Box args={[1.5, 0.1, 0.1]} position={[0, 0.2, 0]}>
               <meshStandardMaterial color={color} />
             </Box>
-            <Box args={[0.1, 0.3, 0.8]} position={[-0.7, 0, 0.2]} rotation={[Math.PI / 2, 0, 0]}>
+            <Box args={[0.1, 0.3, 0.8]} position={[-0.7, 0, -0.3]} >
               <meshStandardMaterial color={color} />
             </Box>
-            <Box args={[0.1, 0.3, 0.8]} position={[0.7, 0, 0.2]} rotation={[Math.PI / 2, 0, 0]}>
+            <Box args={[0.1, 0.3, 0.8]} position={[0.7, 0, -0.3]} >
               <meshStandardMaterial color={color} />
             </Box>
           </>
         )}
         
-        {/* Device Local Frame Axes - Child of rotating group, raised above mesh */}
-        <RokidLocalFrame scale={0.6} />
+        <DeviceLocalFrame scale={0.6} />
       </group>
       
-      {/* Device Label - Outside rotating group */}
       <Text
         rotation={[0, Math.PI, 0]}
         position={[0, -1, 0]}
@@ -330,7 +270,6 @@ function CameraController() {
   const { camera } = useThree();
   
   useEffect(() => {
-    // Set initial camera position
     camera.position.set(2, 6, -10);
     camera.lookAt(0, 0, 0);
   }, [camera]);
@@ -341,7 +280,6 @@ function CameraController() {
 // Main Scene Component
 function Scene({ devices, selectedDevice, onDeviceSelect, calibrationParams }) {
   const [showAxes] = useState(true);
-
   const activeDevices = Object.values(devices).filter(device => device.isActive);
 
   const handleDeviceClick = (deviceKey) => {
@@ -350,7 +288,6 @@ function Scene({ devices, selectedDevice, onDeviceSelect, calibrationParams }) {
 
   return (
     <>
-      {/* Camera Controls */}
       <CameraController />
       <OrbitControls 
         enablePan={true}

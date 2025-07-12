@@ -1,29 +1,44 @@
-import React, { useState } from 'react';
+// IMUOverlay.js - Cleaned and optimized version
+import React from 'react';
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer } from 'recharts';
-import { Activity, Smartphone, Watch, Headphones, Glasses, Wifi, WifiOff, ArrowRight } from 'lucide-react';
+import { 
+  Activity, 
+  Smartphone, 
+  Watch, 
+  Headphones, 
+  Glasses, 
+  Wifi, 
+  WifiOff, 
+  ArrowRight 
+} from 'lucide-react';
+
+// Constants
+const WAVEFORM_SAMPLES = 50;
+const AXIS_COLORS = {
+  x: '#ef4444',
+  y: '#22c55e', 
+  z: '#3b82f6'
+};
 
 // Device Icon Component
-function DeviceIcon({ deviceName, className = "w-4 h-4" }) {
-  switch (deviceName) {
-    case 'phone':
-    case 'iphone':
-      return <Smartphone className={className} />;
-    case 'watch':
-    case 'applewatch':
-      return <Watch className={className} />;
-    case 'headphone':
-    case 'airpods':
-      return <Headphones className={className} />;
-    case 'glasses':
-    case 'arglasses':
-      return <Glasses className={className} />;
-    default:
-      return <Activity className={className} />;
-  }
-}
+const DeviceIcon = ({ deviceName, className = "w-4 h-4" }) => {
+  const iconMap = {
+    'phone': Smartphone,
+    'iphone': Smartphone,
+    'watch': Watch,
+    'applewatch': Watch,
+    'headphone': Headphones,
+    'airpods': Headphones,
+    'glasses': Glasses,
+    'arglasses': Glasses
+  };
+  
+  const Icon = iconMap[deviceName] || Activity;
+  return <Icon className={className} />;
+};
 
-// Waveform Component - For Accelerometer and Gyroscope only
-function Waveform({ data, dataKeys, colors, height = 100 }) {
+// Waveform Component
+const Waveform = ({ data, dataKeys, colors, height = 100 }) => {
   if (!data || data.length === 0) {
     return (
       <div className="waveform-container" style={{ height }}>
@@ -35,15 +50,12 @@ function Waveform({ data, dataKeys, colors, height = 100 }) {
     );
   }
 
-  // Prepare chart data with last 50 samples
-  const chartData = data.slice(-50).map((item, index) => {
-    const relativeTime = index;
-    const dataPoint = { time: relativeTime };
-    
+  // Prepare chart data
+  const chartData = data.slice(-WAVEFORM_SAMPLES).map((item, index) => {
+    const dataPoint = { time: index };
     dataKeys.forEach((key, keyIndex) => {
       dataPoint[key] = item.data[keyIndex] || 0;
     });
-    
     return dataPoint;
   });
 
@@ -68,48 +80,103 @@ function Waveform({ data, dataKeys, colors, height = 100 }) {
       </ResponsiveContainer>
     </div>
   );
-}
+};
 
-// Enhanced Device Card Component
-function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams }) {
+// Sensor Section Component
+const SensorSection = ({ title, values, history, showWaveform = false, isWorldFrame = false }) => {
+  const dataKeys = ['X', 'Y', 'Z'];
+  const colors = [AXIS_COLORS.x, AXIS_COLORS.y, AXIS_COLORS.z];
+  
+  return (
+    <div className="sensor-section">
+      <div className="sensor-header">
+        <span className="sensor-title">{title}</span>
+        {isWorldFrame && (
+          <span className="calibrated-indicator">
+            <ArrowRight size={12} color="#10b981" />
+            <span>World Frame</span>
+          </span>
+        )}
+      </div>
+      
+      <div className="sensor-values">
+        {values.map((value, index) => {
+          const axis = ['x', 'y', 'z'][index];
+          const label = ['X', 'Y', 'Z'][index];
+          const decimals = title.includes('Gyroscope') ? 3 : 2;
+          
+          return (
+            <span key={axis} className={`axis-${axis}`}>
+              {label}: {value?.toFixed(decimals) || '0'.padEnd(decimals + 2, '0')}
+            </span>
+          );
+        })}
+      </div>
+      
+      {showWaveform && (
+        <Waveform
+          data={history}
+          dataKeys={dataKeys}
+          colors={colors}
+          height={100}
+        />
+      )}
+    </div>
+  );
+};
+
+// Rotation Section Component  
+const RotationSection = ({ title, euler, isWorldFrame = false }) => {
+  const rotationLabels = ['Roll', 'Pitch', 'Yaw'];
+  const rotationClasses = ['axis-roll', 'axis-pitch', 'axis-yaw'];
+  
+  return (
+    <div className="sensor-section">
+      <div className="sensor-header">
+        <span className="sensor-title">{title}</span>
+        {isWorldFrame && (
+          <span className="calibrated-indicator">
+            <ArrowRight size={12} color="#10b981" />
+            <span>World Frame</span>
+          </span>
+        )}
+      </div>
+      
+      <div className="sensor-values">
+        {euler?.map((value, index) => (
+          <span key={index} className={rotationClasses[index]}>
+            {rotationLabels[index]}: {value?.toFixed(1) || '0.0'}°
+          </span>
+        )) || <span>No rotation data</span>}
+      </div>
+    </div>
+  );
+};
+
+// Device Card Component
+const DeviceCard = ({ device, isSelected, onSelect, calibrationParams }) => {
   const deviceKey = `${device.device_name}_${device.device_id}`;
   const timeSinceUpdate = Date.now() - device.lastUpdate;
   const isOnline = timeSinceUpdate < 3000;
   
-  // Use the has_gyro flag from the backend
+  // Device capabilities
   const hasGyro = !!device.has_gyro;
-  
-  // Check if this is an AR glasses device (which will have linear_acceleration)
   const isARGlasses = device.device_type === 'ar_glasses' && device.linear_acceleration;
   
-  // Check if we have calibration and world frame data
+  // Calibration status
   const isCalibrated = !!calibrationParams?.isCalibrated;
-  
-  // More explicit check for world frame data - with fallback condition
-  const hasWorldFrameQuaternion = device.worldFrameQuaternion !== undefined;
-  const hasWorldFrameAccelerometer = device.worldFrameAccelerometer !== undefined;
-  const hasWorldFrameEuler = device.worldFrameEuler !== undefined;
-  
-  const hasWorldFrame = isCalibrated && (hasWorldFrameQuaternion || hasWorldFrameAccelerometer || hasWorldFrameEuler);
-
-  // Debug world frame data detection
-  console.log(`Device ${deviceKey} world frame data detection:`, {
-    isCalibrated,
-    hasWorldFrameQuaternion,
-    hasWorldFrameAccelerometer,
-    hasWorldFrameEuler,
-    hasWorldFrame,
-    worldFrameQuaternion: device.worldFrameQuaternion,
-    worldFrameAccelerometer: device.worldFrameAccelerometer,
-    worldFrameEuler: device.worldFrameEuler
-  });
+  const hasWorldFrame = isCalibrated && (
+    device.worldFrameQuaternion || 
+    device.worldFrameAccelerometer || 
+    device.worldFrameEuler
+  );
 
   return (
     <div 
       className={`enhanced-device-card ${isSelected ? 'selected' : ''} ${isOnline ? 'online' : 'offline'}`}
       onClick={() => onSelect(deviceKey)}
     >
-      {/* Header Row */}
+      {/* Header */}
       <div className="device-card-header">
         <div className="device-info-row">
           <DeviceIcon deviceName={device.device_name} className="device-icon" />
@@ -119,8 +186,8 @@ function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams })
             </span>
             <span className="device-meta">
               ID: {device.device_id} • IP: {device.clientIP} • {device.frequency}Hz
-              {hasGyro && <span> • Gyroscope Available</span>}
-              {isARGlasses && <span> • Linear Acc Available</span>}
+              {hasGyro && <span> • Gyro</span>}
+              {isARGlasses && <span> • Linear Acc</span>}
             </span>
           </div>
         </div>
@@ -133,158 +200,94 @@ function EnhancedDeviceCard({ device, isSelected, onSelect, calibrationParams })
         </div>
       </div>
 
-      {/* Raw Acceleration Section */}
-      <div className="sensor-section">
-        <div className="sensor-header">
-          <span className="sensor-title">Raw Acceleration (m/s²)</span>
-        </div>
-        <div className="sensor-values">
-          <span className="axis-x">X: {device.accelerometer?.[0]?.toFixed(2) || '0.00'}</span>
-          <span className="axis-y">Y: {device.accelerometer?.[1]?.toFixed(2) || '0.00'}</span>
-          <span className="axis-z">Z: {device.accelerometer?.[2]?.toFixed(2) || '0.00'}</span>
-        </div>
-        
-        {/* Display raw waveform */}
-        <Waveform
-          data={device.accelerometerHistory}
-          dataKeys={['X', 'Y', 'Z']}
-          colors={['#ef4444', '#22c55e', '#3b82f6']}
-          height={100}
+      {/* Acceleration Sections */}
+      <SensorSection
+        title="Raw Acceleration (m/s²)"
+        values={device.accelerometer || [0, 0, 0]}
+        history={device.accelerometerHistory}
+        showWaveform={true}
+      />
+      
+      {hasWorldFrame && device.worldFrameAccelerometer && (
+        <SensorSection
+          title="World Frame Acceleration (m/s²)"
+          values={device.worldFrameAccelerometer}
+          history={device.worldFrameAccelerometerHistory || []}
+          showWaveform={true}
+          isWorldFrame={true}
         />
-      </div>
-      
-      {/* World Frame Acceleration Section */}
-      {hasWorldFrame && hasWorldFrameAccelerometer && (
-        <div className="sensor-section">
-          <div className="sensor-header">
-            <span className="sensor-title">World Frame Acceleration (m/s²)</span>
-            <span className="calibrated-indicator">
-              <ArrowRight size={12} color="#10b981" />
-              <span>World Frame</span>
-            </span>
-          </div>
-          <div className="sensor-values">
-            <span className="axis-x">X: {device.worldFrameAccelerometer?.[0]?.toFixed(2) || '0.00'}</span>
-            <span className="axis-y">Y: {device.worldFrameAccelerometer?.[1]?.toFixed(2) || '0.00'}</span>
-            <span className="axis-z">Z: {device.worldFrameAccelerometer?.[2]?.toFixed(2) || '0.00'}</span>
-          </div>
-          
-          {/* Display world frame acceleration waveform */}
-          <Waveform
-            data={device.worldFrameAccelerometerHistory || []}
-            dataKeys={['X', 'Y', 'Z']}
-            colors={['#ef4444', '#22c55e', '#3b82f6']}
-            height={100}
-          />
-        </div>
       )}
 
-      {/* Linear Acceleration Section (only for AR glasses) */}
+      {/* Linear Acceleration for AR Glasses */}
       {isARGlasses && (
-        <div className="sensor-section">
-          <div className="sensor-header">
-            <span className="sensor-title">Linear Acceleration (m/s²) - Raw</span>
-          </div>
-          <div className="sensor-values">
-            <span className="axis-x">X: {device.linear_acceleration?.[0]?.toFixed(2) || '0.00'}</span>
-            <span className="axis-y">Y: {device.linear_acceleration?.[1]?.toFixed(2) || '0.00'}</span>
-            <span className="axis-z">Z: {device.linear_acceleration?.[2]?.toFixed(2) || '0.00'}</span>
-          </div>
-          <Waveform
-            data={device.linearAccelerationHistory || []}
-            dataKeys={['X', 'Y', 'Z']}
-            colors={['#ef4444', '#22c55e', '#3b82f6']}
-            height={100}
+        <>
+          <SensorSection
+            title="Linear Acceleration (m/s²) - Raw"
+            values={device.linear_acceleration}
+            history={device.linearAccelerationHistory || []}
+            showWaveform={true}
           />
-        </div>
-      )}
-      
-      {/* World Frame Linear Acceleration Section (only for AR glasses with calibration) */}
-      {isARGlasses && hasWorldFrame && device.worldFrameLinearAcceleration && (
-        <div className="sensor-section">
-          <div className="sensor-header">
-            <span className="sensor-title">Linear Acceleration (m/s²) - World Frame</span>
-            <span className="calibrated-indicator">
-              <ArrowRight size={12} color="#10b981" />
-              <span>World Frame</span>
-            </span>
-          </div>
-          <div className="sensor-values">
-            <span className="axis-x">X: {device.worldFrameLinearAcceleration?.[0]?.toFixed(2) || '0.00'}</span>
-            <span className="axis-y">Y: {device.worldFrameLinearAcceleration?.[1]?.toFixed(2) || '0.00'}</span>
-            <span className="axis-z">Z: {device.worldFrameLinearAcceleration?.[2]?.toFixed(2) || '0.00'}</span>
-          </div>
-          <Waveform
-            data={device.worldFrameLinearAccelerationHistory || []}
-            dataKeys={['X', 'Y', 'Z']}
-            colors={['#ef4444', '#22c55e', '#3b82f6']}
-            height={100}
-          />
-        </div>
+          
+          {hasWorldFrame && device.worldFrameLinearAcceleration && (
+            <SensorSection
+              title="Linear Acceleration (m/s²) - World Frame"
+              values={device.worldFrameLinearAcceleration}
+              history={device.worldFrameLinearAccelerationHistory || []}
+              showWaveform={true}
+              isWorldFrame={true}
+            />
+          )}
+        </>
       )}
 
-      {/* Raw Rotation Section */}
-      <div className="sensor-section">
-        <div className="sensor-header">
-          <span className="sensor-title">Rotation (°) - Raw</span>
-        </div>
-        <div className="sensor-values">
-          <span className="axis-roll">Roll: {device.euler?.[0]?.toFixed(1) || '0.0'}</span>
-          <span className="axis-pitch">Pitch: {device.euler?.[1]?.toFixed(1) || '0.0'}</span>
-          <span className="axis-yaw">Yaw: {device.euler?.[2]?.toFixed(1) || '0.0'}</span>
-        </div>
-      </div>
+      {/* Rotation Sections */}
+      <RotationSection
+        title="Rotation (°) - Raw"
+        euler={device.euler}
+      />
       
-      {/* World Frame Rotation Section */}
-      {hasWorldFrame && hasWorldFrameEuler && (
-        <div className="sensor-section">
-          <div className="sensor-header">
-            <span className="sensor-title">Rotation (°) - World Frame</span>
-            <span className="calibrated-indicator">
-              <ArrowRight size={12} color="#10b981" />
-              <span>World Frame</span>
-            </span>
-          </div>
-          <div className="sensor-values">
-            <span className="axis-roll">Roll: {device.worldFrameEuler?.[0]?.toFixed(1) || '0.0'}</span>
-            <span className="axis-pitch">Pitch: {device.worldFrameEuler?.[1]?.toFixed(1) || '0.0'}</span>
-            <span className="axis-yaw">Yaw: {device.worldFrameEuler?.[2]?.toFixed(1) || '0.0'}</span>
-          </div>
-        </div>
+      {hasWorldFrame && device.worldFrameEuler && (
+        <RotationSection
+          title="Rotation (°) - World Frame"
+          euler={device.worldFrameEuler}
+          isWorldFrame={true}
+        />
       )}
 
-      {/* Gyroscope Section (only if device actually has gyroscope data) */}
+      {/* Gyroscope Section */}
       {hasGyro && (
-        <div className="sensor-section">
-          <div className="sensor-header">
-            <span className="sensor-title">Gyroscope (rad/s)</span>
-          </div>
-          <div className="sensor-values">
-            <span className="axis-x">X: {device.gyroscope?.[0]?.toFixed(3) || '0.000'}</span>
-            <span className="axis-y">Y: {device.gyroscope?.[1]?.toFixed(3) || '0.000'}</span>
-            <span className="axis-z">Z: {device.gyroscope?.[2]?.toFixed(3) || '0.000'}</span>
-          </div>
-          <Waveform
-            data={device.gyroscopeHistory}
-            dataKeys={['X', 'Y', 'Z']}
-            colors={['#ef4444', '#22c55e', '#3b82f6']}
-            height={100}
-          />
-        </div>
+        <SensorSection
+          title="Gyroscope (rad/s)"
+          values={device.gyroscope || [0, 0, 0]}
+          history={device.gyroscopeHistory}
+          showWaveform={true}
+        />
       )}
     </div>
   );
-}
+};
+
+// Empty State Component
+const EmptyState = () => (
+  <div className="empty-state">
+    <Activity className="empty-icon" />
+    <h3>No Active Devices</h3>
+    <p>Connect your IMU devices to see them here.</p>
+    <div className="connection-help">
+      <p>Make sure your devices are sending UDP packets to port 8001.</p>
+    </div>
+  </div>
+);
 
 // Main IMU Overlay Component
-export default function IMUOverlay({ 
+const IMUOverlay = ({ 
   devices, 
   selectedDevice, 
   onDeviceSelect, 
   connectionStatus,
   stats,
   calibrationParams
-}) {
+}) => {
   const activeDevices = Object.values(devices).filter(device => device.isActive);
   const isCalibrated = !!calibrationParams?.isCalibrated;
 
@@ -294,7 +297,7 @@ export default function IMUOverlay({
       <div className="overlay-header">
         <h2>IMU Data Monitor</h2>
         <div className="connection-indicator">
-          <div className={`connection-dot ${connectionStatus}`}></div>
+          <div className={`connection-dot ${connectionStatus}`} />
           <span className="connection-text">
             {connectionStatus === 'connected' ? 'Connected' : 
              connectionStatus === 'reconnecting' ? 'Reconnecting...' : 
@@ -306,7 +309,7 @@ export default function IMUOverlay({
         </div>
       </div>
 
-      {/* Single Tab */}
+      {/* Tabs */}
       <div className="overlay-tabs">
         <div className="tab active">
           Devices ({activeDevices.length})
@@ -317,32 +320,24 @@ export default function IMUOverlay({
       <div className="overlay-content">
         <div className="devices-tab">
           {activeDevices.length === 0 ? (
-            <div className="empty-state">
-              <Activity className="empty-icon" />
-              <h3>No Active Devices</h3>
-              <p>Connect your IMU devices to see them here.</p>
-              <div className="connection-help">
-                <p>Make sure your devices are sending UDP packets to port 8001.</p>
-              </div>
-            </div>
+            <EmptyState />
           ) : (
             <div className="enhanced-devices-list">
-              {activeDevices.map(device => {
-                const deviceKey = `${device.device_name}_${device.device_id}`;
-                return (
-                  <EnhancedDeviceCard
-                    key={deviceKey}
-                    device={device}
-                    isSelected={selectedDevice === deviceKey}
-                    onSelect={onDeviceSelect}
-                    calibrationParams={calibrationParams}
-                  />
-                );
-              })}
+              {activeDevices.map(device => (
+                <DeviceCard
+                  key={`${device.device_name}_${device.device_id}`}
+                  device={device}
+                  isSelected={selectedDevice === `${device.device_name}_${device.device_id}`}
+                  onSelect={onDeviceSelect}
+                  calibrationParams={calibrationParams}
+                />
+              ))}
             </div>
           )}
         </div>
       </div>
     </div>
   );
-}
+};
+
+export default IMUOverlay;

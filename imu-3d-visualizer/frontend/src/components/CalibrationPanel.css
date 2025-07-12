@@ -1,37 +1,44 @@
-.sensor-values {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-  font-size: 0.875rem;
-  font-family: 'Courier New', monospace;
-}
+/* CalibrationPanel.css - Positioned at bottom center of 3D scene */
 
-.axis-x { color: #ef4444; }
-.axis-y { color: #22c55e; }
-.axis-z { color: #3b82f6; }
-.axis-w { color: #a855f7; }
-.axis-roll { color: #ef4444; }
-.axis-pitch { color: #22c55e; }
-.axis-yaw { color: #3b82f6; }/* CalibrationPanel.css */
-
-.calibration-panel {
+/* Container that adapts to the scene width */
+.calibration-panel-container {
   position: fixed;
   bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 50%;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  pointer-events: none; /* Allow clicks to pass through container */
+  transition: all 0.3s ease; /* Smooth transition when overlay toggles */
+}
+
+/* When overlay is shown, panel should be centered in the 3D scene area */
+.calibration-panel-container.with-overlay {
+  right: 24rem; /* Account for 24rem overlay width */
+}
+
+/* When overlay is hidden, panel uses full width */
+.calibration-panel-container.full-width {
+  right: 0;
+}
+
+/* The actual panel */
+.calibration-panel {
   background: rgba(31, 41, 55, 0.95);
   border-radius: 12px;
   border: 1px solid #374151;
   box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
   backdrop-filter: blur(8px);
-  z-index: 1000;
   overflow: hidden;
+  pointer-events: auto; /* Re-enable pointer events for the panel */
+  min-width: 400px;
+  max-width: 600px;
 }
 
 .calibration-content {
-  padding: 16px;
+  padding: 16px 24px;
 }
 
 .calibration-instruction {
@@ -50,13 +57,14 @@
 }
 
 .calibration-button {
-  padding: 8px 16px;
+  padding: 8px 20px;
   border-radius: 8px;
   font-size: 0.9rem;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
   border: 1px solid transparent;
+  min-width: 140px;
 }
 
 .calibration-button.available {
@@ -67,6 +75,8 @@
 
 .calibration-button.available:hover {
   background-color: #059669;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
 }
 
 .calibration-button.disabled {
@@ -83,14 +93,20 @@
   border-color: #1e3a8a;
 }
 
+.calibration-button.done:hover {
+  background-color: #1e3a8a;
+}
+
 .calibration-button.reset {
   background-color: #6b7280;
   color: #f9fafb;
   border-color: #4b5563;
 }
 
-.calibration-button.reset:hover {
+.calibration-button.reset:hover:not(:disabled) {
   background-color: #4b5563;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(107, 114, 128, 0.3);
 }
 
 .calibration-button.reset:disabled {
@@ -98,6 +114,7 @@
   cursor: not-allowed;
 }
 
+/* Progress bar */
 .calibration-progress {
   height: 4px;
   background: #374151;
@@ -108,51 +125,30 @@
 
 .progress-bar {
   height: 100%;
-  background: #10b981;
+  background: linear-gradient(90deg, #10b981 0%, #059669 100%);
   transition: width 0.3s ease;
+  border-radius: 2px;
 }
 
-.calibration-matrix {
-  background: rgba(31, 41, 55, 0.5);
-  border-radius: 8px;
-  padding: 10px;
-  margin-bottom: 15px;
-  font-family: monospace;
-  font-size: 0.8rem;
-}
-
-.matrix-label {
-  color: #9ca3af;
-  margin-bottom: 5px;
-  font-size: 0.75rem;
-}
-
-.matrix-values {
+/* Sensor value styles */
+.sensor-values {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+  font-family: 'Courier New', monospace;
 }
 
-.matrix-row {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-}
+.axis-x { color: #ef4444; }
+.axis-y { color: #22c55e; }
+.axis-z { color: #3b82f6; }
+.axis-w { color: #a855f7; }
+.axis-roll { color: #ef4444; }
+.axis-pitch { color: #22c55e; }
+.axis-yaw { color: #3b82f6; }
 
-.matrix-row span {
-  color: #e5e7eb;
-  width: 50px;
-  text-align: right;
-}
-
-/* Add to App.css or IMUOverlay.css */
-
-.calibration-status {
-  margin-left: 8px;
-  color: #10b981;
-  font-size: 0.85rem;
-}
-
+/* Calibrated indicator */
 .calibrated-indicator {
   display: flex;
   align-items: center;
@@ -162,13 +158,26 @@
   margin-left: 8px;
 }
 
+/* Responsive adjustments */
 @media (max-width: 768px) {
+  .calibration-panel-container.with-overlay {
+    right: 0; /* On mobile, overlay is full width */
+    left: 0;
+    bottom: 16px;
+  }
+  
   .calibration-panel {
-    width: 90%;
+    min-width: 90%;
+    max-width: 90%;
+    margin: 0 16px;
   }
   
   .calibration-buttons {
     flex-direction: column;
     gap: 8px;
+  }
+  
+  .calibration-button {
+    width: 100%;
   }
 }

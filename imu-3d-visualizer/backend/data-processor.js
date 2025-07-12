@@ -1,10 +1,12 @@
 /**
  * Data processing utilities for IMU sensor data
  * Handles coordinate transformations and device-specific processing
- * Converted from Python sensor_utils.py SensorDataProcessor class
+ * Now includes gravity removal for AR glasses using calibration
  */
 
 const { validateSensorData } = require('./data-parser');
+const fs = require('fs');
+const path = require('path');
 
 class DataProcessor {
   constructor(useARAsHeadphone = true) {
@@ -18,7 +20,34 @@ class DataProcessor {
       'glasses': 2  // When useARAsHeadphone=true
     };
 
+    // Load AR glasses calibration
+    this.arGlassesCalibration = null;
+    this.loadARGlassesCalibration();
+
     console.log(`📊 DataProcessor initialized with useARAsHeadphone=${useARAsHeadphone}`);
+  }
+
+  /**
+   * Load AR glasses calibration from JSON file
+   */
+  loadARGlassesCalibration() {
+    try {
+      const calibrationPath = path.join(__dirname, 'rokid_calibration.json');
+      if (fs.existsSync(calibrationPath)) {
+        const calibrationData = JSON.parse(fs.readFileSync(calibrationPath, 'utf8'));
+        this.arGlassesCalibration = {
+          bias: calibrationData.bias,
+          version: calibrationData.version,
+          method: calibrationData.method
+        };
+        console.log(`✅ AR Glasses calibration loaded: bias=[${calibrationData.bias.map(b => b.toFixed(3)).join(', ')}]`);
+      } else {
+        console.log(`⚠️ AR Glasses calibration file not found at ${calibrationPath}`);
+        console.log(`⚠️ Linear acceleration will not be bias-corrected`);
+      }
+    } catch (error) {
+      console.error('❌ Error loading AR glasses calibration:', error);
+    }
   }
 
   /**
@@ -57,7 +86,7 @@ class DataProcessor {
       const accelerometer = [...rawData.accelerometer]; // Copy array
       const quaternion = [...rawData.quaternion]; // Copy array
       const gyroscope = rawData.gyroscope || [0, 0, 0];
-      const hasGyro = !!rawData.has_gyro; // Get gyro availability flag
+      const hasGyro = !!rawData.has_gyro;
 
       // Get device index
       const deviceId = this.getDeviceIndex(deviceName);
@@ -81,7 +110,7 @@ class DataProcessor {
         timestamp: Array.isArray(rawData.timestamps) ? rawData.timestamps[0] : rawData.timestamps,
         accelerometer: processedAcc,
         gyroscope: [...gyroscope],
-        has_gyro: hasGyro, // Preserve gyro availability flag
+        has_gyro: hasGyro,
         quaternion: processedQuat,
         raw_quaternion: [...quaternion],
         euler: eulerAngles,
@@ -101,7 +130,7 @@ class DataProcessor {
       const accelerometer = [...rawData.accelerometer];
       const quaternion = [...rawData.quaternion];
       const gyroscope = rawData.gyroscope || [0, 0, 0];
-      const hasGyro = !!rawData.has_gyro; // Get gyro availability flag
+      const hasGyro = !!rawData.has_gyro;
 
       // Determine device index based on useARAsHeadphone flag
       let deviceId, deviceName;
@@ -113,7 +142,7 @@ class DataProcessor {
         deviceName = 'glasses';
       }
 
-      // Apply AR glasses transformations - include both raw and linear acceleration
+      // Apply AR glasses transformations and gravity removal
       const { rawAcc, linearAcc, processedQuat } = this.applyARGlassesTransformations(
         accelerometer, quaternion
       );
@@ -126,13 +155,14 @@ class DataProcessor {
         device_name: deviceName,
         device_type: 'ar_glasses',
         timestamp: Array.isArray(rawData.timestamps) ? rawData.timestamps[0] : rawData.timestamps,
-        accelerometer: rawAcc, // Raw acceleration with coordinate transform
-        linear_acceleration: linearAcc, // Gravity-removed acceleration
+        accelerometer: rawAcc, // Raw acceleration (gravity included)
+        linear_acceleration: linearAcc, // Gravity-removed and bias-corrected acceleration
         gyroscope: [...gyroscope],
-        has_gyro: hasGyro, // Preserve gyro availability flag
+        has_gyro: hasGyro,
         quaternion: processedQuat,
         raw_quaternion: [...quaternion],
         euler: eulerAngles,
+        calibration_applied: !!this.arGlassesCalibration,
         raw_message: rawData.raw_message
       };
     } catch (error) {
@@ -174,7 +204,6 @@ class DataProcessor {
     // Apply device-specific transformations
     if (deviceName === 'headphone') {
       // AirPods coordinate frame adjustments
-      // Convert quaternion to Euler for transformation
       const euler = this.quaternionToEulerRadians(quat);
       const fixedEuler = [euler[0] * -1, euler[2], euler[1]];
       quat = this.eulerToQuaternion(fixedEuler);
@@ -184,25 +213,24 @@ class DataProcessor {
     return { processedAcc: acc, processedQuat: quat };
   }
 
-
-/**
-   * Apply coordinate transformations for AR glasses, returning both raw and linear acceleration
-   * AR Glasses frame: X:right, Y:forward, Z:up
+  /**
+   * Apply coordinate transformations for AR glasses with proper gravity removal
    */
   applyARGlassesTransformations(accelerometer, quaternion) {
     // Copy arrays
-    let acc = [...accelerometer];
+    const acc = [...accelerometer];
     const quat = [...quaternion];
 
-    // Transform raw acceleration with the coordinate system change
-    let transformedRawAcc = [-acc[0], acc[2], -acc[1]];
+    // Keep raw acceleration as is (it's already in the coordinate system from Unity)
+    const rawAcc = [...acc];
 
-    // Calculate linear acceleration (gravity removed)
+    // Calculate gravity-removed linear acceleration
     let linearAcc;
     try {
-      const gravityWorld = [0, 0, 9.81];
+      // Remove gravity using the same method as Python
+      const gravityWorld = [0, 0, -9.81]; // Negative Z as determined by calibration
       
-      // Create rotation matrix from quaternion to transform gravity to device frame
+      // Transform gravity to device frame
       const rotationMatrix = this.quaternionToRotationMatrix(quat);
       const rotationMatrixInv = this.transposeMatrix(rotationMatrix);
       const gravityDevice = this.multiplyMatrixVector(rotationMatrixInv, gravityWorld);
@@ -214,21 +242,25 @@ class DataProcessor {
         acc[2] - gravityDevice[2]
       ];
       
-      // Apply the same coordinate transformation to linear acceleration
-      linearAcc = [-linearAcc[0], linearAcc[2], -linearAcc[1]];
+      // Apply bias correction if calibration is loaded
+      if (this.arGlassesCalibration && this.arGlassesCalibration.bias) {
+        linearAcc = [
+          linearAcc[0] - this.arGlassesCalibration.bias[0],
+          linearAcc[1] - this.arGlassesCalibration.bias[1],
+          linearAcc[2] - this.arGlassesCalibration.bias[2]
+        ];
+      }
+      
     } catch (error) {
       console.warn('Failed to calculate linear acceleration:', error);
-      // If gravity removal fails, use the raw transformed acceleration
-      linearAcc = [...transformedRawAcc];
+      // If gravity removal fails, return zeros
+      linearAcc = [0, 0, 0];
     }
 
-    // Quaternion transformations can be added here if needed
-    const transformedQuat = quat;
-
     return { 
-      rawAcc: transformedRawAcc,
+      rawAcc: rawAcc,
       linearAcc: linearAcc,
-      processedQuat: transformedQuat 
+      processedQuat: quat 
     };
   }
 
@@ -248,7 +280,7 @@ class DataProcessor {
       const sinp = 2 * (w * y - z * x);
       let pitch;
       if (Math.abs(sinp) >= 1) {
-        pitch = Math.sign(sinp) * Math.PI / 2; // Use 90 degrees if out of range
+        pitch = Math.sign(sinp) * Math.PI / 2;
       } else {
         pitch = Math.asin(sinp);
       }
@@ -365,17 +397,11 @@ class DataProcessor {
   }
 
   /**
-   * Normalize a quaternion
+   * Reload calibration (useful if calibration file is updated)
    */
-  normalizeQuaternion(quaternion) {
-    const [x, y, z, w] = quaternion;
-    const magnitude = Math.sqrt(x * x + y * y + z * z + w * w);
-    
-    if (magnitude === 0) {
-      return [0, 0, 0, 1]; // Return identity quaternion
-    }
-    
-    return [x / magnitude, y / magnitude, z / magnitude, w / magnitude];
+  reloadCalibration() {
+    console.log('🔄 Reloading AR glasses calibration...');
+    this.loadARGlassesCalibration();
   }
 
   /**
@@ -384,7 +410,9 @@ class DataProcessor {
   getStatistics() {
     return {
       useARAsHeadphone: this.useARAsHeadphone,
-      deviceIndices: { ...this.deviceIndices }
+      deviceIndices: { ...this.deviceIndices },
+      arGlassesCalibrationLoaded: !!this.arGlassesCalibration,
+      arGlassesBias: this.arGlassesCalibration ? this.arGlassesCalibration.bias : null
     };
   }
 }

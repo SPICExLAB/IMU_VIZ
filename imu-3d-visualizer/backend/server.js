@@ -1,13 +1,16 @@
+// backend/server.js - Updated with calibration support
 const WebSocket = require('ws');
 const UDPReceiver = require('./udp-receiver');
 const DataProcessor = require('./data-processor');
+const CalibrationManager = require('./calibration-manager');
 
 class IMUWebSocketServer {
   constructor() {
     this.port = 3001;
     this.udpPort = 8001;
-    this.clients = new Set();
+    this.clients = new Map(); // Changed to Map for better client tracking
     this.dataProcessor = new DataProcessor();
+    this.calibrationManager = new CalibrationManager();
     
     // Add device tracking for gyro capabilities
     this.deviceCapabilities = {};
@@ -36,7 +39,12 @@ class IMUWebSocketServer {
       const clientId = `${clientIP}:${req.socket.remotePort}`;
       console.log(`📱 Client connected: ${clientId}`);
       
-      this.clients.add(ws);
+      // Store client with metadata
+      this.clients.set(clientId, {
+        ws: ws,
+        ip: clientIP,
+        connectedAt: Date.now()
+      });
       this.stats.clients = this.clients.size;
 
       // Send welcome message with current stats
@@ -47,15 +55,27 @@ class IMUWebSocketServer {
         clientId: clientId
       }));
 
+      // Handle client messages (including calibration)
+      ws.on('message', (data) => {
+        try {
+          const message = JSON.parse(data);
+          this.handleClientMessage(clientId, message);
+        } catch (error) {
+          console.error(`Error parsing message from ${clientId}:`, error);
+        }
+      });
+
       ws.on('close', (code, reason) => {
-        this.clients.delete(ws);
+        this.clients.delete(clientId);
+        this.calibrationManager.clearCalibration(clientId);
         this.stats.clients = this.clients.size;
         console.log(`📱 Client disconnected: ${clientId} (code: ${code})`);
       });
 
       ws.on('error', (error) => {
         console.error(`WebSocket error from ${clientId}:`, error.message);
-        this.clients.delete(ws);
+        this.clients.delete(clientId);
+        this.calibrationManager.clearCalibration(clientId);
         this.stats.clients = this.clients.size;
       });
     });
@@ -74,9 +94,56 @@ class IMUWebSocketServer {
       
       // Log stats periodically
       this.startStatsLogger();
+      
+      // Clean up old calibrations periodically
+      setInterval(() => {
+        this.calibrationManager.cleanup();
+      }, 3600000); // Every hour
     } else {
       console.error('❌ Failed to start UDP receiver');
       process.exit(1);
+    }
+  }
+
+  handleClientMessage(clientId, message) {
+    switch (message.type) {
+      case 'calibration':
+        console.log(`📐 Received calibration from client ${clientId}`);
+        this.calibrationManager.setCalibration(clientId, message.data);
+        
+        // Send confirmation
+        const client = this.clients.get(clientId);
+        if (client && client.ws.readyState === WebSocket.OPEN) {
+          client.ws.send(JSON.stringify({
+            type: 'calibration_confirmed',
+            clientId: clientId,
+            timestamp: Date.now()
+          }));
+        }
+        break;
+        
+      case 'tpose_calibration':
+        console.log(`🙆 Received T-pose calibration from client ${clientId}`);
+        this.calibrationManager.setTPoseCalibration(clientId, message.data);
+        
+        // Send confirmation
+        const tposeClient = this.clients.get(clientId);
+        if (tposeClient && tposeClient.ws.readyState === WebSocket.OPEN) {
+          tposeClient.ws.send(JSON.stringify({
+            type: 'tpose_calibration_confirmed',
+            clientId: clientId,
+            timestamp: Date.now()
+          }));
+        }
+        break;
+        
+      case 'reset_calibration':
+        console.log(`🔄 Resetting calibration for client ${clientId}`);
+        this.calibrationManager.clearCalibration(clientId);
+        break;
+        
+      default:
+        console.log(`Unknown message type from ${clientId}:`, message.type);
     }
   }
 
@@ -109,16 +176,33 @@ class IMUWebSocketServer {
           this.deviceCapabilities[deviceIdentifier].last_seen = new Date();
         }
         
-        // Broadcast to all connected clients
-        const message = JSON.stringify({
-          type: 'imu_data',
-          deviceType,
-          data: processedData,
-          timestamp: Date.now(),
-          clientIP
+        // Apply calibration for each connected client
+        this.clients.forEach((client, clientId) => {
+          // Check if this client has calibration
+          let dataToSend = processedData;
+          
+          if (this.calibrationManager.getCalibrationStatus(clientId)) {
+            // Apply calibration for this specific client
+            dataToSend = this.calibrationManager.applyCalibration(clientId, processedData);
+          }
+          
+          // Send to this specific client
+          if (client.ws.readyState === WebSocket.OPEN) {
+            const message = JSON.stringify({
+              type: 'imu_data',
+              deviceType,
+              data: dataToSend,
+              timestamp: Date.now(),
+              clientIP
+            });
+            
+            try {
+              client.ws.send(message);
+            } catch (error) {
+              console.error(`Error sending to client ${clientId}:`, error);
+            }
+          }
         });
-
-        this.broadcastToClients(message);
 
         // Log occasionally
         const totalCount = this.stats[deviceType];
@@ -134,33 +218,6 @@ class IMUWebSocketServer {
     }
   }
 
-  broadcastToClients(message) {
-    if (this.clients.size === 0) return;
-
-    // Remove disconnected clients and send to active ones
-    const deadClients = [];
-    
-    this.clients.forEach(ws => {
-      if (ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(message);
-        } catch (error) {
-          console.error('Error sending to client:', error);
-          deadClients.push(ws);
-        }
-      } else {
-        deadClients.push(ws);
-      }
-    });
-
-    // Clean up dead connections
-    deadClients.forEach(ws => {
-      this.clients.delete(ws);
-    });
-    
-    this.stats.clients = this.clients.size;
-  }
-
   startStatsLogger() {
     setInterval(() => {
       const total = this.stats.ios + this.stats.ar_glasses + this.stats.unknown + this.stats.errors;
@@ -172,6 +229,15 @@ class IMUWebSocketServer {
         console.log(`❓ Unknown: ${this.stats.unknown} packets`);
         console.log(`❌ Errors: ${this.stats.errors} packets`);
         console.log(`🌐 Connected clients: ${this.stats.clients}`);
+        
+        // Log calibration status
+        let calibratedClients = 0;
+        this.clients.forEach((client, clientId) => {
+          if (this.calibrationManager.getCalibrationStatus(clientId)) {
+            calibratedClients++;
+          }
+        });
+        console.log(`📐 Calibrated clients: ${calibratedClients}`);
         
         // Log device capabilities
         if (Object.keys(this.deviceCapabilities).length > 0) {
@@ -190,7 +256,7 @@ class IMUWebSocketServer {
           console.log(`⏳ Ready for IMU data (${this.stats.clients} clients connected)`);
         }
       }
-    }, 30000); // Every 30 seconds instead of 10
+    }, 30000); // Every 30 seconds
   }
 
   stop() {

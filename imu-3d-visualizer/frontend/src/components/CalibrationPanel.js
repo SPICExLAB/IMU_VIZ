@@ -1,64 +1,37 @@
-// Fix for CalibrationPanel.js to ensure the calibration is fully completed and applied
-
-import React, { useState, useRef, useEffect } from 'react';
+// CalibrationPanel.js - With T-pose calibration support
+import { useState, useRef } from 'react';
 import { 
   calculateAverageQuaternion, 
   quaternionToRotationMatrix,
   transposeMatrix,
-  identityQuaternion,
-  quaternionToEuler,
-  matrixMultiply,
-  matrixVectorMultiply,
-  rotationMatrixToQuaternion
+  matrixMultiply
 } from '../utils/mathUtils';
 import './CalibrationPanel.css';
 
-// Main CalibrationPanel Component
 const CalibrationPanel = ({ 
   selectedDevice, 
   devices, 
   onCalibrationComplete,
-  onCalibrationReset
+  onCalibrationReset,
+  onTPoseCalibrationComplete,
+  showOverlay = false,
+  calibrationParams = {}
 }) => {
   // Calibration states
-  const [calibrationStep, setCalibrationStep] = useState('idle'); // 'idle', 'worldFrame', 'inProgress', 'complete'
+  const [calibrationStep, setCalibrationStep] = useState('idle');
   const [countdown, setCountdown] = useState(3);
   const [progress, setProgress] = useState(0);
   
-  // Button states
-  const [worldFrameButtonState, setWorldFrameButtonState] = useState('available'); // 'disabled', 'available', 'done'
-  
-  // Calibration data
-  const [smpl2imu, setSmpl2imu] = useState(null);
-  const [refQuaternion, setRefQuaternion] = useState(null);
-  
   // Collected samples
   const samplesRef = useRef([]);
+  const tposeSamplesRef = useRef({});
   const calibrationDuration = 3; // seconds
   const samplingRate = 30; // Hz
   const samplesToCollect = calibrationDuration * samplingRate;
   
-  // Update button states based on calibration step
-  useEffect(() => {
-    switch (calibrationStep) {
-      case 'idle':
-        setWorldFrameButtonState(selectedDevice ? 'available' : 'disabled');
-        break;
-      case 'worldFrame':
-      case 'inProgress':
-        setWorldFrameButtonState('disabled');
-        break;
-      case 'complete':
-        setWorldFrameButtonState('done');
-        break;
-      default:
-        break;
-    }
-  }, [calibrationStep, selectedDevice]);
-  
   // Handle world frame alignment
   const startWorldFrameCalibration = () => {
-    if (!selectedDevice || worldFrameButtonState !== 'available') return;
+    if (!selectedDevice) return;
     
     console.log('Starting world frame calibration for device:', selectedDevice);
     
@@ -79,12 +52,34 @@ const CalibrationPanel = ({
     }, 1000);
   };
   
+  // Handle T-pose calibration
+  const startTPoseCalibration = () => {
+    console.log('Starting T-pose calibration for all devices');
+    
+    setCalibrationStep('tposeCountdown');
+    setCountdown(3);
+    tposeSamplesRef.current = {};
+    
+    // Start countdown
+    const countdownInterval = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 1) {
+          clearInterval(countdownInterval);
+          collectTPoseSamples();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+  
   // Collect samples for world frame alignment
   const collectWorldFrameSamples = () => {
     setCalibrationStep('inProgress');
+    setProgress(0);
     let sampleCount = 0;
     
-    console.log('Starting sample collection');
+    console.log('Starting world frame sample collection');
     
     const sampleInterval = setInterval(() => {
       if (sampleCount >= samplesToCollect) {
@@ -104,22 +99,51 @@ const CalibrationPanel = ({
           });
           
           sampleCount++;
-          setProgress(sampleCount / samplesToCollect * 100);
-        } else {
-          console.warn('Missing quaternion or accelerometer data for sample', sampleCount);
+          setProgress((sampleCount / samplesToCollect) * 100);
         }
-      } else {
-        console.warn('Selected device not found in devices list');
       }
+    }, 1000 / samplingRate);
+  };
+  
+  // Collect T-pose samples for all active devices
+  const collectTPoseSamples = () => {
+    setCalibrationStep('tposeInProgress');
+    setProgress(0);
+    let sampleCount = 0;
+    
+    console.log('Starting T-pose sample collection');
+    
+    const sampleInterval = setInterval(() => {
+      if (sampleCount >= samplesToCollect) {
+        clearInterval(sampleInterval);
+        processTPoseSamples();
+        return;
+      }
+      
+      // Collect samples from all active devices
+      Object.entries(devices).forEach(([deviceKey, deviceData]) => {
+        if (deviceData.isActive && deviceData.worldFrameQuaternion) {
+          if (!tposeSamplesRef.current[deviceKey]) {
+            tposeSamplesRef.current[deviceKey] = [];
+          }
+          
+          tposeSamplesRef.current[deviceKey].push({
+            quaternion: [...deviceData.quaternion],
+            worldFrameQuaternion: [...deviceData.worldFrameQuaternion]
+          });
+        }
+      });
+      
+      sampleCount++;
+      setProgress((sampleCount / samplesToCollect) * 100);
     }, 1000 / samplingRate);
   };
   
   // Process collected world frame samples
   const processWorldFrameSamples = () => {
-    // Calculate average quaternion and acceleration
     const samples = samplesRef.current;
     
-    console.log(`Processing ${samples.length} samples for calibration`);
+    console.log(`Processing ${samples.length} samples for world frame calibration`);
     
     if (samples.length === 0) {
       console.error('No samples collected for calibration!');
@@ -128,77 +152,33 @@ const CalibrationPanel = ({
     }
     
     try {
-      // Average quaternions from samples
-      const avgQuaternion = calculateAverageQuaternion(samples.map(s => s.quaternion));
-      console.log('Average quaternion:', avgQuaternion);
-      
-      // Store this reference quaternion
-      setRefQuaternion(avgQuaternion);
+      // Calculate average quaternion from samples
+      const avgQuaternion = calculateAverageQuaternion(
+        samples.map(s => s.quaternion)
+      );
       
       // Convert to rotation matrix
       const rotationMatrix = quaternionToRotationMatrix(avgQuaternion);
-      console.log('Rotation matrix:', rotationMatrix);
       
       // Calculate smpl2imu as the transpose (inverse for rotation matrices)
-      const calculatedSmpl2imu = transposeMatrix(rotationMatrix);
-      console.log('smpl2imu matrix:', calculatedSmpl2imu);
+      const smpl2imu = transposeMatrix(rotationMatrix);
       
-      setSmpl2imu(calculatedSmpl2imu);
-      setCalibrationStep('complete');
-      
-      // Create the reference world quaternion
-      const referenceWorldQuat = identityQuaternion();
-      
-      // Debug: Test the calibration matrix with a sample
-      const testSample = samples[0];
-      if (testSample) {
-        const { quaternion, accelerometer } = testSample;
-        console.log('Testing calibration with sample:', { quaternion, accelerometer });
-        
-        // Convert quaternion to rotation matrix
-        const rotMatrix = quaternionToRotationMatrix(quaternion);
-        
-        // Apply smpl2imu transformation
-        const worldRotMatrix = matrixMultiply(calculatedSmpl2imu, rotMatrix);
-        
-        // Convert back to quaternion
-        const worldQuaternion = rotationMatrixToQuaternion(worldRotMatrix);
-        
-        // Apply transformation to acceleration
-        const worldAcceleration = matrixVectorMultiply(calculatedSmpl2imu, accelerometer);
-        
-        console.log('Test results:', {
-          worldQuaternion,
-          worldAcceleration,
-          worldEuler: quaternionToEuler(worldQuaternion)
-        });
-      }
-      
-      // Pass calibration results back to parent
+      // Prepare calibration data
       const calibrationData = {
-        smpl2imu: calculatedSmpl2imu,
+        smpl2imu: smpl2imu,
         referenceDeviceId: selectedDevice,
-        referencedWorldQuat: referenceWorldQuat,
+        referenceWorldQuat: avgQuaternion,
         isCalibrated: true
       };
       
-      console.log('Calibration complete. Data:', calibrationData);
+      console.log('World frame calibration data prepared:', calibrationData);
       
+      // Send to parent component
       if (onCalibrationComplete) {
         onCalibrationComplete(calibrationData);
       }
       
-      // Immediate verification of calibration
-      setTimeout(() => {
-        if (devices[selectedDevice]) {
-          const device = devices[selectedDevice];
-          console.log('Verification check - device after calibration:', {
-            hasWorldFrame: !!device.worldFrameQuaternion,
-            worldFrameQuaternion: device.worldFrameQuaternion,
-            worldFrameAccelerometer: device.worldFrameAccelerometer
-          });
-        }
-      }, 500); // Short delay to allow state to update
+      setCalibrationStep('worldFrameComplete');
       
     } catch (error) {
       console.error('Error processing calibration samples:', error);
@@ -206,14 +186,58 @@ const CalibrationPanel = ({
     }
   };
   
+  // Process T-pose samples
+  const processTPoseSamples = () => {
+    console.log('Processing T-pose samples for all devices');
+    
+    try {
+      const device2boneMatrices = {};
+      
+      // Calculate device2bone for each device
+      Object.entries(tposeSamplesRef.current).forEach(([deviceKey, samples]) => {
+        if (samples.length > 0) {
+          // Average the world frame quaternions
+          const avgWorldQuat = calculateAverageQuaternion(
+            samples.map(s => s.worldFrameQuaternion)
+          );
+          
+          // Convert to rotation matrix
+          const tposeWorldRotMatrix = quaternionToRotationMatrix(avgWorldQuat);
+          
+          // Calculate device2bone matrix
+          // In T-pose, the device should align with the bone's local frame
+          // device2bone = inverse(tposeWorldRotMatrix) * identity
+          // This simplifies to: device2bone = transpose(tposeWorldRotMatrix)
+          const device2bone = transposeMatrix(tposeWorldRotMatrix);
+          
+          device2boneMatrices[deviceKey] = device2bone;
+          
+          console.log(`Device2bone calculated for ${deviceKey}:`, device2bone);
+        }
+      });
+      
+      // Send T-pose calibration data
+      if (onTPoseCalibrationComplete) {
+        onTPoseCalibrationComplete({
+          device2boneMatrices,
+          isTPoseCalibrated: true
+        });
+      }
+      
+      setCalibrationStep('complete');
+      
+    } catch (error) {
+      console.error('Error processing T-pose samples:', error);
+      setCalibrationStep('worldFrameComplete');
+    }
+  };
+  
   // Reset calibration
   const resetCalibration = () => {
     setCalibrationStep('idle');
-    setSmpl2imu(null);
-    setRefQuaternion(null);
+    setProgress(0);
     samplesRef.current = [];
-    
-    console.log('Calibration reset');
+    tposeSamplesRef.current = {};
     
     if (onCalibrationReset) {
       onCalibrationReset();
@@ -229,67 +253,89 @@ const CalibrationPanel = ({
         return `Place ${devices[selectedDevice]?.device_name} aligned with your body (X=Left, Y=Up, Z=Forward). Starting in ${countdown}...`;
       case 'inProgress':
         return "Hold still while we calibrate the reference frame...";
+      case 'worldFrameComplete':
+        return "World frame established! Now calibrate T-pose for all devices.";
+      case 'tposeCountdown':
+        return `Stand in T-pose with all devices worn correctly. Starting in ${countdown}...`;
+      case 'tposeInProgress':
+        return "Hold T-pose while we calibrate all devices...";
       case 'complete':
-        return "Reference frame established! You can reset to calibrate again.";
+        return "Calibration complete! All devices are calibrated.";
       default:
         return "";
     }
   };
   
-  // Render button with state-based styles
-  const renderAlignButton = () => {
-    const buttonClass = `calibration-button ${worldFrameButtonState}`;
-    return (
-      <button 
-        className={buttonClass} 
-        onClick={startWorldFrameCalibration}
-        disabled={worldFrameButtonState === 'disabled'}
-      >
-        {worldFrameButtonState === 'done' ? "Align World Frame ✓" : "Align World Frame"}
-      </button>
-    );
+  // Get button states
+  const getWorldFrameButtonState = () => {
+    if (!selectedDevice) return 'disabled';
+    if (calibrationStep === 'idle') return 'available';
+    if (calibrationStep === 'worldFrameComplete' || calibrationStep === 'complete') return 'done';
+    return 'disabled';
   };
   
-  // Render reset button
-  const renderResetButton = () => {
-    return (
-      <button 
-        className="calibration-button reset" 
-        onClick={resetCalibration}
-        disabled={calibrationStep === 'worldFrame' || calibrationStep === 'inProgress'}
-      >
-        Reset
-      </button>
-    );
+  const getTPoseButtonState = () => {
+    if (calibrationStep === 'worldFrameComplete') return 'available';
+    if (calibrationStep === 'complete') return 'done';
+    return 'disabled';
   };
   
-  // Render progress bar if active calibration
+  // Render progress bar
   const renderProgressBar = () => {
-    if (calibrationStep === 'inProgress') {
+    if (calibrationStep === 'inProgress' || calibrationStep === 'tposeInProgress') {
       return (
         <div className="calibration-progress">
           <div 
             className="progress-bar" 
             style={{ width: `${progress}%` }}
-          ></div>
+          />
         </div>
       );
     }
     return null;
   };
   
+  const worldFrameButtonState = getWorldFrameButtonState();
+  const tposeButtonState = getTPoseButtonState();
+  
   return (
-    <div className="calibration-panel">
-      <div className="calibration-content">
-        <div className="calibration-instruction">
-          {getInstructionText()}
-        </div>
-        
-        {renderProgressBar()}
-        
-        <div className="calibration-buttons">
-          {renderAlignButton()}
-          {renderResetButton()}
+    <div className={`calibration-panel-container ${showOverlay ? 'with-overlay' : 'full-width'}`}>
+      <div className="calibration-panel">
+        <div className="calibration-content">
+          <div className="calibration-instruction">
+            {getInstructionText()}
+          </div>
+          
+          {renderProgressBar()}
+          
+          <div className="calibration-buttons">
+            <button 
+              className={`calibration-button ${worldFrameButtonState}`}
+              onClick={startWorldFrameCalibration}
+              disabled={worldFrameButtonState === 'disabled'}
+            >
+              {worldFrameButtonState === 'done' ? "World Frame ✓" : "Align World Frame"}
+            </button>
+            
+            <button 
+              className={`calibration-button ${tposeButtonState}`}
+              onClick={startTPoseCalibration}
+              disabled={tposeButtonState === 'disabled'}
+            >
+              {tposeButtonState === 'done' ? "T-Pose ✓" : "T-Pose Calibration"}
+            </button>
+            
+            <button 
+              className="calibration-button reset"
+              onClick={resetCalibration}
+              disabled={calibrationStep === 'worldFrame' || 
+                       calibrationStep === 'inProgress' || 
+                       calibrationStep === 'tposeCountdown' ||
+                       calibrationStep === 'tposeInProgress'}
+            >
+              Reset
+            </button>
+          </div>
         </div>
       </div>
     </div>

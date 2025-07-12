@@ -1,15 +1,10 @@
-// App.js - Refactored implementation with better math utility organization
-
+// App.js - Updated to use server-side calibration
 import React, { useState, useEffect, useRef } from 'react';
 import ThreeJSScene from './components/ThreeJSScene';
 import IMUOverlay from './components/IMUOverlay';
 import ConnectionStatus from './components/ConnectionStatus';
 import CalibrationPanel from './components/CalibrationPanel';
-import { 
-  quaternionToEuler, 
-  applyCalibrationToDevice,
-  matrixVectorMultiply
-} from './utils/mathUtils';
+import { quaternionToEuler } from './utils/mathUtils';
 import './App.css';
 
 const WEBSOCKET_URL = 'ws://localhost:3001';
@@ -34,12 +29,10 @@ function App() {
   const [showOverlay, setShowOverlay] = useState(true);
   const [showCalibration, setShowCalibration] = useState(false);
   
-  // Calibration state
+  // Calibration state (simplified - server handles the math)
   const [calibrationParams, setCalibrationParams] = useState({
-    smpl2imu: null,
-    referenceDeviceId: null,
-    referencedWorldQuat: null,
-    isCalibrated: false
+    isCalibrated: false,
+    referenceDeviceId: null
   });
 
   // Initialize WebSocket connection
@@ -124,237 +117,225 @@ function App() {
         handleIMUData(message);
         break;
 
+      case 'calibration_confirmed':
+        console.log('✅ Calibration confirmed by server');
+        break;
+
       default:
         console.log('Unknown message type:', message.type);
     }
   };
 
-const handleIMUData = (message) => {
-  const { deviceType, data, clientIP } = message;
-  
-  if (!data || data.device_id === null || data.device_id === undefined) {
-    return;
-  }
+  const handleIMUData = (message) => {
+    const { deviceType, data, clientIP } = message;
+    
+    if (!data || data.device_id === null || data.device_id === undefined) {
+      return;
+    }
 
-  const deviceKey = `${data.device_name}_${data.device_id}`;
-  const timestamp = Date.now();
+    const deviceKey = `${data.device_name}_${data.device_id}`;
+    const timestamp = Date.now();
 
-  // *** Critical fix: Apply calibration OUTSIDE of the setDevices call ***
-  // This ensures we're not relying on previous state for calibration calculation
-  let worldFrameData = null;
-  
-  // Check if calibration should be applied
-  if (calibrationParams.isCalibrated && calibrationParams.smpl2imu && data.quaternion && data.accelerometer) {
-    try {
-      // Calculate world frame data
-      worldFrameData = applyCalibrationToDevice(
-        data.quaternion,
-        data.accelerometer,
-        calibrationParams.smpl2imu
+    setDevices(prevDevices => {
+      const currentDevice = prevDevices[deviceKey] || {
+        device_id: data.device_id,
+        device_name: data.device_name,
+        device_type: data.device_type || deviceType,
+        clientIP: clientIP,
+        isActive: true,
+        lastUpdate: timestamp,
+        sampleCount: 0,
+        frequency: 0,
+        accelerometerHistory: [],
+        linearAccelerationHistory: [],
+        gyroscopeHistory: [],
+        eulerHistory: [],
+        quaternionHistory: [],
+        worldFrameAccelerometerHistory: [],
+        worldFrameLinearAccelerationHistory: [],
+        worldFrameQuaternionHistory: [],
+        worldFrameEulerHistory: []
+      };
+
+      // Update device data with all data from server (including world frame if present)
+      const updatedDevice = {
+        ...currentDevice,
+        // Raw data
+        accelerometer: data.accelerometer,
+        quaternion: data.quaternion,
+        euler: data.euler || quaternionToEuler(data.quaternion),
+        has_gyro: !!data.has_gyro,
+        
+        // World frame data (if server calculated it)
+        worldFrameQuaternion: data.worldFrameQuaternion,
+        worldFrameQuatForViz: data.worldFrameQuatForViz,
+        worldFrameAccelerometer: data.worldFrameAccelerometer,
+        worldFrameEuler: data.worldFrameEuler,
+        worldFrameLinearAcceleration: data.worldFrameLinearAcceleration,
+        isCalibrated: !!data.isCalibrated,
+        
+        // Metadata
+        lastUpdate: timestamp,
+        sampleCount: currentDevice.sampleCount + 1,
+        isActive: true,
+        clientIP: clientIP
+      };
+      
+      // Handle gyroscope data if available
+      if (data.has_gyro) {
+        updatedDevice.gyroscope = data.gyroscope || [0, 0, 0];
+      }
+      
+      // Handle linear acceleration data for AR glasses
+      if (data.linear_acceleration) {
+        updatedDevice.linear_acceleration = data.linear_acceleration;
+      }
+
+      // Add to history buffers (keep last 300 samples ~10 seconds at 30Hz)
+      const maxHistory = 300;
+      const addToHistory = (history, newData) => {
+        if (!newData) return history || [];
+        const updated = [...(history || []), { timestamp, data: newData }];
+        return updated.slice(-maxHistory);
+      };
+
+      // Always track raw data
+      updatedDevice.accelerometerHistory = addToHistory(
+        currentDevice.accelerometerHistory, 
+        data.accelerometer
       );
       
-      console.log(`Applied calibration to device ${deviceKey} with result:`, 
-        worldFrameData ? 'success' : 'failed');
-    } catch (error) {
-      console.error(`Error applying calibration to device ${deviceKey}:`, error);
-    }
-  }
-
-  // Now update device state with pre-calculated world frame data
-  setDevices(prevDevices => {
-    const currentDevice = prevDevices[deviceKey] || {
-      device_id: data.device_id,
-      device_name: data.device_name,
-      device_type: data.device_type || deviceType,
-      clientIP: clientIP,
-      isActive: true,
-      lastUpdate: timestamp,
-      sampleCount: 0,
-      frequency: 0,
-      accelerometerHistory: [],
-      linearAccelerationHistory: [],
-      gyroscopeHistory: [],
-      eulerHistory: [],
-      quaternionHistory: [],
-      worldFrameAccelerometerHistory: [],
-      worldFrameLinearAccelerationHistory: [],
-      worldFrameQuaternionHistory: [],
-      worldFrameEulerHistory: []
-    };
-
-    // Update device data
-    const updatedDevice = {
-      ...currentDevice,
-      accelerometer: data.accelerometer,
-      quaternion: data.quaternion,
-      euler: data.euler || quaternionToEuler(data.quaternion),
-      has_gyro: !!data.has_gyro,
-      lastUpdate: timestamp,
-      sampleCount: currentDevice.sampleCount + 1,
-      isActive: true,
-      clientIP: clientIP
-    };
-    
-    // Handle gyroscope data if available
-    if (data.has_gyro) {
-      updatedDevice.gyroscope = data.gyroscope || [0, 0, 0];
-    }
-    
-    // Handle linear acceleration data for AR glasses
-    if (data.linear_acceleration) {
-      updatedDevice.linear_acceleration = data.linear_acceleration;
-    }
-    
-    // Apply pre-calculated world frame data if available
-    if (worldFrameData) {
-      updatedDevice.worldFrameQuaternion = worldFrameData.quaternion;
-      updatedDevice.worldFrameAccelerometer = worldFrameData.acceleration;
-      updatedDevice.worldFrameEuler = quaternionToEuler(worldFrameData.quaternion);
+      updatedDevice.eulerHistory = addToHistory(
+        currentDevice.eulerHistory, 
+        data.euler || updatedDevice.euler
+      );
       
-      // Also process linear acceleration for AR glasses if available
-      if (data.linear_acceleration && calibrationParams.smpl2imu) {
-        try {
-          updatedDevice.worldFrameLinearAcceleration = matrixVectorMultiply(
-            calibrationParams.smpl2imu,
-            updatedDevice.linear_acceleration
-          );
-        } catch (error) {
-          console.error('Error calculating world frame linear acceleration:', error);
+      updatedDevice.quaternionHistory = addToHistory(
+        currentDevice.quaternionHistory, 
+        data.quaternion
+      );
+      
+      // Track linear acceleration for AR glasses
+      if (data.linear_acceleration) {
+        updatedDevice.linearAccelerationHistory = addToHistory(
+          currentDevice.linearAccelerationHistory || [],
+          data.linear_acceleration
+        );
+      }
+      
+      // Only add gyroscope data to history if the device has a gyroscope
+      if (data.has_gyro) {
+        updatedDevice.gyroscopeHistory = addToHistory(
+          currentDevice.gyroscopeHistory, 
+          data.gyroscope
+        );
+      }
+      
+      // Track world frame data if available from server
+      if (data.worldFrameAccelerometer) {
+        updatedDevice.worldFrameAccelerometerHistory = addToHistory(
+          currentDevice.worldFrameAccelerometerHistory || [],
+          data.worldFrameAccelerometer
+        );
+      }
+      
+      if (data.worldFrameQuaternion) {
+        updatedDevice.worldFrameQuaternionHistory = addToHistory(
+          currentDevice.worldFrameQuaternionHistory || [],
+          data.worldFrameQuaternion
+        );
+      }
+      
+      if (data.worldFrameEuler) {
+        updatedDevice.worldFrameEulerHistory = addToHistory(
+          currentDevice.worldFrameEulerHistory || [],
+          data.worldFrameEuler
+        );
+      }
+      
+      // Track world frame linear acceleration if available
+      if (data.worldFrameLinearAcceleration) {
+        updatedDevice.worldFrameLinearAccelerationHistory = addToHistory(
+          currentDevice.worldFrameLinearAccelerationHistory || [],
+          data.worldFrameLinearAcceleration
+        );
+      }
+
+      // Calculate frequency (approximate)
+      if (updatedDevice.sampleCount % 30 === 0) {
+        const timeSpan = timestamp - (updatedDevice.accelerometerHistory[0]?.timestamp || timestamp);
+        if (timeSpan > 0) {
+          updatedDevice.frequency = Math.round((updatedDevice.accelerometerHistory.length / timeSpan) * 1000);
         }
       }
-      
-      // Add debug log to verify world frame data was applied
-      console.log(`World frame data applied to device ${deviceKey}:`, {
-        worldFrameQuaternion: updatedDevice.worldFrameQuaternion,
-        worldFrameAccelerometer: updatedDevice.worldFrameAccelerometer,
-        worldFrameEuler: updatedDevice.worldFrameEuler
-      });
-    }
 
-    // Add to history buffers (keep last 300 samples ~10 seconds at 30Hz)
-    const maxHistory = 300;
-    const addToHistory = (history, newData) => {
-      if (!newData) return history || [];
-      const updated = [...(history || []), { timestamp, data: newData }];
-      return updated.slice(-maxHistory);
-    };
+      return {
+        ...prevDevices,
+        [deviceKey]: updatedDevice
+      };
+    });
 
-    // Always track raw data
-    updatedDevice.accelerometerHistory = addToHistory(
-      currentDevice.accelerometerHistory, 
-      data.accelerometer
-    );
-    
-    updatedDevice.eulerHistory = addToHistory(
-      currentDevice.eulerHistory, 
-      data.euler || updatedDevice.euler
-    );
-    
-    updatedDevice.quaternionHistory = addToHistory(
-      currentDevice.quaternionHistory, 
-      data.quaternion
-    );
-    
-    // Track linear acceleration for AR glasses
-    if (data.linear_acceleration) {
-      updatedDevice.linearAccelerationHistory = addToHistory(
-        currentDevice.linearAccelerationHistory || [],
-        data.linear_acceleration
-      );
-    }
-    
-    // Only add gyroscope data to history if the device has a gyroscope
-    if (data.has_gyro) {
-      updatedDevice.gyroscopeHistory = addToHistory(
-        currentDevice.gyroscopeHistory, 
-        data.gyroscope
-      );
-    }
-    
-    // Track world frame data if available
-    if (updatedDevice.worldFrameAccelerometer) {
-      updatedDevice.worldFrameAccelerometerHistory = addToHistory(
-        currentDevice.worldFrameAccelerometerHistory || [],
-        updatedDevice.worldFrameAccelerometer
-      );
-    }
-    
-    if (updatedDevice.worldFrameQuaternion) {
-      updatedDevice.worldFrameQuaternionHistory = addToHistory(
-        currentDevice.worldFrameQuaternionHistory || [],
-        updatedDevice.worldFrameQuaternion
-      );
-    }
-    
-    if (updatedDevice.worldFrameEuler) {
-      updatedDevice.worldFrameEulerHistory = addToHistory(
-        currentDevice.worldFrameEulerHistory || [],
-        updatedDevice.worldFrameEuler
-      );
-    }
-    
-    // Track world frame linear acceleration if available
-    if (updatedDevice.worldFrameLinearAcceleration) {
-      updatedDevice.worldFrameLinearAccelerationHistory = addToHistory(
-        currentDevice.worldFrameLinearAccelerationHistory || [],
-        updatedDevice.worldFrameLinearAcceleration
-      );
-    }
+    // Update stats
+    setStats(prevStats => ({
+      ...prevStats,
+      [deviceType]: (prevStats[deviceType] || 0) + 1
+    }));
+  };
 
-    // Calculate frequency (approximate)
-    if (updatedDevice.sampleCount % 30 === 0) {
-      const timeSpan = timestamp - (updatedDevice.accelerometerHistory[0]?.timestamp || timestamp);
-      if (timeSpan > 0) {
-        updatedDevice.frequency = Math.round((updatedDevice.accelerometerHistory.length / timeSpan) * 1000);
-      }
-    }
-
-    return {
-      ...prevDevices,
-      [deviceKey]: updatedDevice
-    };
-  });
-
-  // Update stats
-  setStats(prevStats => ({
-    ...prevStats,
-    [deviceType]: (prevStats[deviceType] || 0) + 1
-  }));
-};
-
-  // Handle calibration completion
+  // Handle calibration completion - send to server
   const handleCalibrationComplete = (calibrationData) => {
-    console.log('Calibration complete:', calibrationData);
-    setCalibrationParams(calibrationData);
+    console.log('Calibration complete, sending to server:', calibrationData);
+    
+    // Send calibration data to server
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'calibration',
+        data: calibrationData
+      }));
+    }
+    
+    // Update local state to reflect calibration is active
+    setCalibrationParams({
+      isCalibrated: true,
+      referenceDeviceId: calibrationData.referenceDeviceId,
+      referenceWorldQuat: calibrationData.referenceWorldQuat
+    });
   };
   
-  // Handle calibration reset
-  const handleCalibrationReset = () => {
-    setCalibrationParams({
-      smpl2imu: null,
-      referenceDeviceId: null,
-      referencedWorldQuat: null,
-      isCalibrated: false
-    });
+  // Handle T-pose calibration completion
+  const handleTPoseCalibrationComplete = (tposeData) => {
+    console.log('T-pose calibration complete, sending to server:', tposeData);
     
-    // Clear world frame data from all devices
-    setDevices(prevDevices => {
-      const updatedDevices = {};
-      
-      Object.entries(prevDevices).forEach(([key, device]) => {
-        updatedDevices[key] = {
-          ...device,
-          worldFrameQuaternion: undefined,
-          worldFrameAccelerometer: undefined,
-          worldFrameEuler: undefined,
-          worldFrameLinearAcceleration: undefined,
-          worldFrameAccelerometerHistory: [],
-          worldFrameQuaternionHistory: [],
-          worldFrameLinearAccelerationHistory: []
-        };
-      });
-      
-      return updatedDevices;
+    // Send T-pose calibration data to server
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'tpose_calibration',
+        data: tposeData
+      }));
+    }
+    
+    // Update local state
+    setCalibrationParams(prev => ({
+      ...prev,
+      isTPoseCalibrated: true,
+      device2boneMatrices: tposeData.device2boneMatrices
+    }));
+  };
+  
+  // Handle calibration reset - notify server
+  const handleCalibrationReset = () => {
+    // Notify server to clear calibration
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'reset_calibration'
+      }));
+    }
+    
+    // Reset local state
+    setCalibrationParams({
+      isCalibrated: false,
+      isTPoseCalibrated: false,
+      referenceDeviceId: null
     });
     
     console.log('Calibration reset');
@@ -438,7 +419,10 @@ const handleIMUData = (message) => {
           selectedDevice={selectedDevice}
           devices={devices}
           onCalibrationComplete={handleCalibrationComplete}
+          onTPoseCalibrationComplete={handleTPoseCalibrationComplete}
           onCalibrationReset={handleCalibrationReset}
+          showOverlay={showOverlay}
+          calibrationParams={calibrationParams}
         />
       )}
 
