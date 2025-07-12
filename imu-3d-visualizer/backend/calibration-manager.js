@@ -19,6 +19,8 @@ class CalibrationManager {
       referenceDeviceId: calibrationData.referenceDeviceId,
       referenceWorldQuat: calibrationData.referenceWorldQuat,
       device2boneMatrices: {},
+      accOffsets: {},
+      linearAccOffsets: {},
       timestamp: Date.now()
     });
   }
@@ -34,7 +36,15 @@ class CalibrationManager {
     
     if (calibration) {
       calibration.device2boneMatrices = tposeData.device2boneMatrices;
+      calibration.accOffsets = tposeData.accOffsets || {};
+      calibration.linearAccOffsets = tposeData.linearAccOffsets || {};
       calibration.isTPoseCalibrated = true;
+      
+      // Log offset information
+      console.log(`📊 Acceleration offsets stored for ${Object.keys(tposeData.accOffsets || {}).length} devices`);
+      if (tposeData.linearAccOffsets && Object.keys(tposeData.linearAccOffsets).length > 0) {
+        console.log(`📊 Linear acceleration offsets stored for ${Object.keys(tposeData.linearAccOffsets).length} AR glasses`);
+      }
     }
   }
 
@@ -61,11 +71,6 @@ class CalibrationManager {
     }
 
     try {
-      // For iOS devices, we need to handle the coordinate system properly
-      // iOS quaternion represents the device's orientation where:
-      // - Identity = device laying flat, screen up
-      // - Our world frame is defined when device is vertical, screen facing away
-      
       // Get device2bone matrix if T-pose calibrated
       const deviceKey = `${deviceData.device_name}_${deviceData.device_id}`;
       const device2bone = calibration.device2boneMatrices?.[deviceKey];
@@ -84,25 +89,34 @@ class CalibrationManager {
       // Calculate world frame accelerometer
       // For acceleration, we only use smpl2imu * rotMatrix (not device2bone)
       const accTransformMatrix = math.multiply(calibration.smpl2imu, rotMatrix);
-      const worldAccelerometer = math.multiply(accTransformMatrix, deviceData.accelerometer);
+      let worldAccelerometer = math.multiply(accTransformMatrix, deviceData.accelerometer);
       
-      // Calculate world frame linear acceleration if available
+      // Apply acceleration offset if available
+      if (calibration.accOffsets && calibration.accOffsets[deviceKey]) {
+        worldAccelerometer = [
+          worldAccelerometer[0] - calibration.accOffsets[deviceKey][0],
+          worldAccelerometer[1] - calibration.accOffsets[deviceKey][1],
+          worldAccelerometer[2] - calibration.accOffsets[deviceKey][2]
+        ];
+      }
+      
+      // Calculate world frame linear acceleration if available (AR glasses)
       let worldLinearAcceleration;
       if (deviceData.linear_acceleration) {
         worldLinearAcceleration = math.multiply(accTransformMatrix, deviceData.linear_acceleration);
+        
+        // Apply linear acceleration offset if available
+        if (calibration.linearAccOffsets && calibration.linearAccOffsets[deviceKey]) {
+          worldLinearAcceleration = [
+            worldLinearAcceleration[0] - calibration.linearAccOffsets[deviceKey][0],
+            worldLinearAcceleration[1] - calibration.linearAccOffsets[deviceKey][1],
+            worldLinearAcceleration[2] - calibration.linearAccOffsets[deviceKey][2]
+          ];
+        }
       }
       
       // Calculate world frame Euler angles
       const worldEuler = this.quaternionToEuler(worldQuaternion);
-      
-    //   // Debug logging
-    //   console.log(`Calibration applied for ${deviceData.device_name}:`, {
-    //     deviceQuat: deviceData.quaternion,
-    //     worldQuat: worldQuaternion,
-    //     deviceAcc: deviceData.accelerometer,
-    //     worldAcc: worldAccelerometer,
-    //     worldEuler: worldEuler
-    //   });
       
       // Calculate visualization quaternion based on device type
       const worldFrameQuatForViz = this.getVisualizationQuaternion(
@@ -119,7 +133,9 @@ class CalibrationManager {
         worldFrameAccelerometer: worldAccelerometer,
         worldFrameLinearAcceleration: worldLinearAcceleration,
         worldFrameEuler: worldEuler,
-        isCalibrated: true
+        isCalibrated: true,
+        hasAccOffset: !!(calibration.accOffsets && calibration.accOffsets[deviceKey]),
+        hasLinearAccOffset: !!(calibration.linearAccOffsets && calibration.linearAccOffsets[deviceKey])
       };
       
     } catch (error) {
@@ -221,7 +237,22 @@ class CalibrationManager {
    * Get calibration status for a client
    */
   getCalibrationStatus(clientId) {
-    return this.calibrations.has(clientId);
+    const calibration = this.calibrations.get(clientId);
+    if (!calibration) return { isCalibrated: false };
+    
+    return {
+      isCalibrated: true,
+      isTPoseCalibrated: !!calibration.isTPoseCalibrated,
+      hasAccOffsets: Object.keys(calibration.accOffsets || {}).length > 0,
+      hasLinearAccOffsets: Object.keys(calibration.linearAccOffsets || {}).length > 0
+    };
+  }
+
+  /**
+   * Get calibration data for a client
+   */
+  getCalibrationData(clientId) {
+    return this.calibrations.get(clientId);
   }
 
   /**

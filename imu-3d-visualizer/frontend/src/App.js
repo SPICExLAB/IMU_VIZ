@@ -1,4 +1,4 @@
-// App.js - Updated to use server-side calibration
+// App.js - Updated T-pose calibration handler
 import React, { useState, useEffect, useRef } from 'react';
 import ThreeJSScene from './components/ThreeJSScene';
 import IMUOverlay from './components/IMUOverlay';
@@ -10,6 +10,8 @@ import './App.css';
 const WEBSOCKET_URL = 'ws://localhost:3001';
 
 function App() {
+  // ... (previous state and effects remain the same until handleTPoseCalibrationComplete)
+
   // WebSocket connection
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const wsRef = useRef(null);
@@ -121,6 +123,10 @@ function App() {
         console.log('✅ Calibration confirmed by server');
         break;
 
+      case 'tpose_calibration_confirmed':
+        console.log('✅ T-pose calibration confirmed by server');
+        break;
+
       default:
         console.log('Unknown message type:', message.type);
     }
@@ -173,6 +179,8 @@ function App() {
         worldFrameEuler: data.worldFrameEuler,
         worldFrameLinearAcceleration: data.worldFrameLinearAcceleration,
         isCalibrated: !!data.isCalibrated,
+        hasAccOffset: !!data.hasAccOffset,
+        hasLinearAccOffset: !!data.hasLinearAccOffset,
         
         // Metadata
         lastUpdate: timestamp,
@@ -302,9 +310,17 @@ function App() {
     });
   };
   
-  // Handle T-pose calibration completion
+  // Handle T-pose calibration completion - Updated to include acceleration offsets
   const handleTPoseCalibrationComplete = (tposeData) => {
     console.log('T-pose calibration complete, sending to server:', tposeData);
+    
+    // Log offset information
+    if (tposeData.accOffsets) {
+      console.log('Acceleration offsets:', tposeData.accOffsets);
+    }
+    if (tposeData.linearAccOffsets) {
+      console.log('Linear acceleration offsets (AR glasses):', tposeData.linearAccOffsets);
+    }
     
     // Send T-pose calibration data to server
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -318,7 +334,9 @@ function App() {
     setCalibrationParams(prev => ({
       ...prev,
       isTPoseCalibrated: true,
-      device2boneMatrices: tposeData.device2boneMatrices
+      device2boneMatrices: tposeData.device2boneMatrices,
+      accOffsets: tposeData.accOffsets,
+      linearAccOffsets: tposeData.linearAccOffsets
     }));
   };
   

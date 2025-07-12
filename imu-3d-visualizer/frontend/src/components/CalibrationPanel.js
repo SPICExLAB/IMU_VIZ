@@ -1,4 +1,4 @@
-// CalibrationPanel.js - With T-pose calibration support
+// CalibrationPanel.js - With acceleration offset support
 import { useState, useRef } from 'react';
 import { 
   calculateAverageQuaternion, 
@@ -127,10 +127,23 @@ const CalibrationPanel = ({
             tposeSamplesRef.current[deviceKey] = [];
           }
           
-          tposeSamplesRef.current[deviceKey].push({
+          // Collect all necessary data including accelerations
+          const sample = {
             quaternion: [...deviceData.quaternion],
-            worldFrameQuaternion: [...deviceData.worldFrameQuaternion]
-          });
+            worldFrameQuaternion: [...deviceData.worldFrameQuaternion],
+            accelerometer: [...deviceData.accelerometer],
+            worldFrameAccelerometer: deviceData.worldFrameAccelerometer ? 
+              [...deviceData.worldFrameAccelerometer] : null
+          };
+          
+          // For AR glasses, also collect linear acceleration
+          if (deviceData.device_type === 'ar_glasses' && deviceData.linear_acceleration) {
+            sample.linearAcceleration = [...deviceData.linear_acceleration];
+            sample.worldFrameLinearAcceleration = deviceData.worldFrameLinearAcceleration ? 
+              [...deviceData.worldFrameLinearAcceleration] : null;
+          }
+          
+          tposeSamplesRef.current[deviceKey].push(sample);
         }
       });
       
@@ -186,14 +199,16 @@ const CalibrationPanel = ({
     }
   };
   
-  // Process T-pose samples
+  // Process T-pose samples with acceleration offset calculation
   const processTPoseSamples = () => {
     console.log('Processing T-pose samples for all devices');
     
     try {
       const device2boneMatrices = {};
+      const accOffsets = {};
+      const linearAccOffsets = {};
       
-      // Calculate device2bone for each device
+      // Calculate device2bone and acceleration offsets for each device
       Object.entries(tposeSamplesRef.current).forEach(([deviceKey, samples]) => {
         if (samples.length > 0) {
           // Average the world frame quaternions
@@ -205,21 +220,50 @@ const CalibrationPanel = ({
           const tposeWorldRotMatrix = quaternionToRotationMatrix(avgWorldQuat);
           
           // Calculate device2bone matrix
-          // In T-pose, the device should align with the bone's local frame
-          // device2bone = inverse(tposeWorldRotMatrix) * identity
-          // This simplifies to: device2bone = transpose(tposeWorldRotMatrix)
           const device2bone = transposeMatrix(tposeWorldRotMatrix);
-          
           device2boneMatrices[deviceKey] = device2bone;
           
-          console.log(`Device2bone calculated for ${deviceKey}:`, device2bone);
+          // Calculate acceleration offset (average world frame acceleration in T-pose)
+          const validAccSamples = samples.filter(s => s.worldFrameAccelerometer);
+          if (validAccSamples.length > 0) {
+            const avgWorldAcc = validAccSamples.reduce((sum, sample) => {
+              return [
+                sum[0] + sample.worldFrameAccelerometer[0],
+                sum[1] + sample.worldFrameAccelerometer[1],
+                sum[2] + sample.worldFrameAccelerometer[2]
+              ];
+            }, [0, 0, 0]).map(v => v / validAccSamples.length);
+            
+            accOffsets[deviceKey] = avgWorldAcc;
+            console.log(`Acc offset for ${deviceKey}:`, avgWorldAcc);
+          }
+          
+          // For AR glasses, also calculate linear acceleration offset
+          const deviceData = devices[deviceKey];
+          if (deviceData && deviceData.device_type === 'ar_glasses') {
+            const validLinearSamples = samples.filter(s => s.worldFrameLinearAcceleration);
+            if (validLinearSamples.length > 0) {
+              const avgWorldLinearAcc = validLinearSamples.reduce((sum, sample) => {
+                return [
+                  sum[0] + sample.worldFrameLinearAcceleration[0],
+                  sum[1] + sample.worldFrameLinearAcceleration[1],
+                  sum[2] + sample.worldFrameLinearAcceleration[2]
+                ];
+              }, [0, 0, 0]).map(v => v / validLinearSamples.length);
+              
+              linearAccOffsets[deviceKey] = avgWorldLinearAcc;
+              console.log(`Linear acc offset for ${deviceKey}:`, avgWorldLinearAcc);
+            }
+          }
         }
       });
       
-      // Send T-pose calibration data
+      // Send T-pose calibration data with acceleration offsets
       if (onTPoseCalibrationComplete) {
         onTPoseCalibrationComplete({
           device2boneMatrices,
+          accOffsets,
+          linearAccOffsets,
           isTPoseCalibrated: true
         });
       }
