@@ -2,22 +2,12 @@
   "name": "imu-3d-visualizer",
   "version": "1.0.0",
   "description": "Real-time 3D visualization of IMU sensor data",
-  "private": true,
   "scripts": {
     "start": "concurrently \"npm run backend\" \"npm run frontend\"",
-    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
     "backend": "cd backend && npm start",
-    "frontend": "cd frontend && npm start",
-    "backend-only": "cd backend && npm start",
-    "frontend-only": "cd frontend && npm start",
-    "build": "cd frontend && npm run build",
-    "postinstall": "npm run install:backend && npm run install:frontend",
-    "install:backend": "cd backend && npm install",
-    "install:frontend": "cd frontend && npm install",
-    "install-all": "npm install && npm run install:backend && npm run install:frontend",
-    "clean": "rm -rf node_modules backend/node_modules frontend/node_modules",
-    "clean:windows": "rmdir /s /q node_modules && cd backend && rmdir /s /q node_modules && cd ../frontend && rmdir /s /q node_modules && cd ..",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "frontend": "cd frontend && npm run dev",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "build": "cd frontend && npm run build"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
@@ -26,21 +16,10 @@
     "imu",
     "3d",
     "visualization",
-    "react",
-    "threejs",
     "websocket",
-    "rokid",
-    "ar-glasses",
-    "sensor-fusion"
+    "react",
+    "three.js"
   ],
   "author": "",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/yourusername/imu-3d-visualizer.git"
-  },
-  "engines": {
-    "node": ">=14.0.0",
-    "npm": ">=6.0.0"
-  }
+  "license": "MIT"
 }

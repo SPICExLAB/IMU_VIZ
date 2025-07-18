@@ -1,18 +1,32 @@
-// backend/server.js - Updated with calibration support
+// Main IMU WebSocket Server
+// Handles iOS devices (iPhone, Watch, AirPods) and AR glasses data
+
 const WebSocket = require('ws');
-const UDPReceiver = require('./udp-receiver');
-const DataProcessor = require('./data-processor');
-const CalibrationManager = require('./calibration-manager');
+const UDPReceiver = require('./receivers/udp-receiver');
+const UDPSender = require('./core/udp-sender');
+const CalibrationManager = require('./core/calibration-manager');
+const config = require('./config/default.json');
+
+// CONFIGURATION FLAG
+// Set to true to map AR glasses as headphone (index 2) for MobilePoser compatibility
+// Set to false to use separate device index for AR glasses
+const USE_AR_AS_HEADPHONE = true;
 
 class IMUWebSocketServer {
   constructor() {
-    this.port = 3001;
-    this.udpPort = 8001;
-    this.clients = new Map(); // Changed to Map for better client tracking
-    this.dataProcessor = new DataProcessor();
-    this.calibrationManager = new CalibrationManager();
+    // Load configuration
+    this.config = config.server;
+    this.port = this.config.websocketPort || 3001;
+    this.udpPort = this.config.udpReceiverPort || 8001;
+    this.udpSendPort = this.config.udpSenderPort || 9001;
+    this.targetFPS = this.config.targetFPS || 30;
     
-    // Add device tracking for gyro capabilities
+    // Initialize components
+    this.clients = new Map();
+    this.calibrationManager = new CalibrationManager();
+    this.udpSender = new UDPSender(this.udpSendPort, '127.0.0.1', this.targetFPS);
+    
+    // Device tracking
     this.deviceCapabilities = {};
     
     // Statistics
@@ -25,6 +39,7 @@ class IMUWebSocketServer {
     };
     
     console.log('🚀 IMU WebSocket Server initializing...');
+    console.log(`📋 Configuration: USE_AR_AS_HEADPHONE = ${USE_AR_AS_HEADPHONE}`);
   }
 
   start() {
@@ -47,15 +62,18 @@ class IMUWebSocketServer {
       });
       this.stats.clients = this.clients.size;
 
-      // Send welcome message with current stats
+      // Send welcome message
       ws.send(JSON.stringify({
         type: 'connection',
         message: 'Connected to IMU WebSocket Server',
         stats: this.stats,
-        clientId: clientId
+        clientId: clientId,
+        config: {
+          useARAsHeadphone: USE_AR_AS_HEADPHONE
+        }
       }));
 
-      // Handle client messages (including calibration)
+      // Handle client messages
       ws.on('message', (data) => {
         try {
           const message = JSON.parse(data);
@@ -80,25 +98,32 @@ class IMUWebSocketServer {
       });
     });
 
-    // Initialize UDP Receiver
-    this.udpReceiver = new UDPReceiver(this.udpPort);
-    this.udpReceiver.on('data', (deviceType, rawData, clientIP) => {
-      this.handleIMUData(deviceType, rawData, clientIP);
+    // Initialize UDP Receiver with device mapping flag
+    this.udpReceiver = new UDPReceiver(this.udpPort, USE_AR_AS_HEADPHONE);
+    this.udpReceiver.on('data', (deviceType, processedData, clientIP) => {
+      this.handleIMUData(deviceType, processedData, clientIP);
     });
 
-    // Start UDP listener
+    // Start UDP receiver
     if (this.udpReceiver.start()) {
-      console.log(`🌐 WebSocket server listening on port ${this.port}`);
-      console.log(`📡 UDP listener active on port ${this.udpPort}`);
-      console.log('📱 Ready for IMU connections!');
-      
-      // Log stats periodically
-      this.startStatsLogger();
-      
-      // Clean up old calibrations periodically
-      setInterval(() => {
-        this.calibrationManager.cleanup();
-      }, 3600000); // Every hour
+      // Start UDP sender
+      if (this.udpSender.start()) {
+        console.log(`🌐 WebSocket server listening on port ${this.port}`);
+        console.log(`📡 UDP receiver active on port ${this.udpPort}`);
+        console.log(`📤 UDP sender active on port ${this.udpSendPort} at ${this.targetFPS}Hz`);
+        console.log('📱 Ready for IMU connections!');
+        
+        // Log stats periodically
+        this.startStatsLogger();
+        
+        // Clean up old calibrations periodically
+        setInterval(() => {
+          this.calibrationManager.cleanup();
+        }, 3600000); // Every hour
+      } else {
+        console.error('❌ Failed to start UDP sender');
+        process.exit(1);
+      }
     } else {
       console.error('❌ Failed to start UDP receiver');
       process.exit(1);
@@ -147,19 +172,15 @@ class IMUWebSocketServer {
     }
   }
 
-  handleIMUData(deviceType, rawData, clientIP) {
+  handleIMUData(deviceType, processedData, clientIP) {
     try {
-      // Process the raw data
-      const processedData = this.dataProcessor.processDeviceData(deviceType, rawData);
-      
       if (processedData) {
         // Update statistics
-        this.stats[deviceType]++;
+        this.stats[deviceType] = (this.stats[deviceType] || 0) + 1;
         
-        // Track device capabilities for better reporting
+        // Track device capabilities
         const deviceIdentifier = `${processedData.device_name}-${clientIP}`;
         
-        // Update device capabilities tracking
         if (!this.deviceCapabilities[deviceIdentifier]) {
           this.deviceCapabilities[deviceIdentifier] = {
             device_name: processedData.device_name,
@@ -169,24 +190,28 @@ class IMUWebSocketServer {
             last_seen: new Date()
           };
           
-          // Log when we detect a new device
           console.log(`📱 New device detected: ${processedData.device_name} from ${clientIP} (has_gyro: ${processedData.has_gyro ? 'YES' : 'NO'})`);
         } else {
-          // Update last seen time
           this.deviceCapabilities[deviceIdentifier].last_seen = new Date();
         }
         
         // Apply calibration for each connected client
         this.clients.forEach((client, clientId) => {
-          // Check if this client has calibration
           let dataToSend = processedData;
+          const calibrationData = this.calibrationManager.getCalibrationData(clientId);
           
-          if (this.calibrationManager.getCalibrationStatus(clientId)) {
+          if (this.calibrationManager.getCalibrationStatus(clientId).isCalibrated) {
             // Apply calibration for this specific client
             dataToSend = this.calibrationManager.applyCalibration(clientId, processedData);
+            
+            // If fully calibrated, send to UDP sender
+            if (calibrationData && calibrationData.isTPoseCalibrated && dataToSend.isCalibrated) {
+              const deviceKey = `${dataToSend.device_name}_${dataToSend.device_id}`;
+              this.udpSender.updateDeviceData(deviceKey, dataToSend, calibrationData);
+            }
           }
           
-          // Send to this specific client
+          // Send to WebSocket client
           if (client.ws.readyState === WebSocket.OPEN) {
             const message = JSON.stringify({
               type: 'imu_data',
@@ -220,24 +245,38 @@ class IMUWebSocketServer {
 
   startStatsLogger() {
     setInterval(() => {
-      const total = this.stats.ios + this.stats.ar_glasses + this.stats.unknown + this.stats.errors;
+      const total = this.stats.ios + this.stats.ar_glasses + (this.stats.unknown || 0) + this.stats.errors;
       
       if (total > 0) {
         console.log('\n📈 === IMU Server Statistics ===');
         console.log(`📱 iOS devices: ${this.stats.ios} packets`);
         console.log(`🥽 AR glasses: ${this.stats.ar_glasses} packets`);
-        console.log(`❓ Unknown: ${this.stats.unknown} packets`);
+        if (this.stats.unknown > 0) {
+          console.log(`❓ Unknown: ${this.stats.unknown} packets`);
+        }
         console.log(`❌ Errors: ${this.stats.errors} packets`);
         console.log(`🌐 Connected clients: ${this.stats.clients}`);
         
         // Log calibration status
         let calibratedClients = 0;
+        let tposeCalibratedClients = 0;
         this.clients.forEach((client, clientId) => {
-          if (this.calibrationManager.getCalibrationStatus(clientId)) {
+          const status = this.calibrationManager.getCalibrationStatus(clientId);
+          if (status.isCalibrated) {
             calibratedClients++;
+            if (status.isTPoseCalibrated) {
+              tposeCalibratedClients++;
+            }
           }
         });
-        console.log(`📐 Calibrated clients: ${calibratedClients}`);
+        console.log(`📐 Calibrated clients: ${calibratedClients} (T-pose: ${tposeCalibratedClients})`);
+        
+        // Log UDP sender stats
+        const senderStats = this.udpSender.getStatistics();
+        if (senderStats.isRunning) {
+          console.log(`📤 UDP Sender: ${senderStats.packetsSent} packets sent to port ${this.udpSendPort}`);
+          console.log(`📤 Active devices in sender: ${senderStats.activeDevices}`);
+        }
         
         // Log device capabilities
         if (Object.keys(this.deviceCapabilities).length > 0) {
@@ -249,12 +288,8 @@ class IMUWebSocketServer {
         }
         
         console.log(`📊 Total packets: ${total}`);
+        console.log(`🔧 Device mapping: AR glasses as ${USE_AR_AS_HEADPHONE ? 'headphone (index 2)' : 'separate device'}`);
         console.log('===============================\n');
-      } else if (this.stats.clients > 0) {
-        // Only log this every 30 seconds when no data
-        if (Date.now() % 30000 < 10000) {
-          console.log(`⏳ Ready for IMU data (${this.stats.clients} clients connected)`);
-        }
       }
     }, 30000); // Every 30 seconds
   }
@@ -264,6 +299,10 @@ class IMUWebSocketServer {
     
     if (this.udpReceiver) {
       this.udpReceiver.stop();
+    }
+    
+    if (this.udpSender) {
+      this.udpSender.stop();
     }
     
     if (this.wss) {

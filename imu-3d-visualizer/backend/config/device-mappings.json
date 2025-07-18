@@ -1,0 +1,31 @@
+{
+  "description": "Device index mappings for MobilePoser compatibility",
+  "version": "1.0",
+  "indices": {
+    "phone": 0,
+    "watch": 1,
+    "headphone": 2,
+    "glasses_as_headphone": 2,
+    "glasses_separate": 4,
+    "unused_3": 3,
+    "unused_4": 4
+  },
+  "deviceNames": {
+    "ios": {
+      "phone": ["phone", "iphone"],
+      "watch": ["watch", "applewatch", "apple watch"],
+      "headphone": ["headphone", "airpods", "airpod"]
+    },
+    "unity": {
+      "glasses": ["glasses", "arglasses", "ar glasses", "rokid"]
+    },
+    "android": {
+      "watch": ["android watch", "wear os", "galaxy watch"],
+      "glasses": ["android glasses", "android ar"]
+    }
+  },
+  "notes": {
+    "mobilePoser": "Original MobilePoser expects 5 devices: [phone, watch, headphone, xx, xx]",
+    "arGlassesMapping": "When useARAsHeadphone=true, AR glasses map to index 2 (headphone slot)"
+  }
+}

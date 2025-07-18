@@ -1,5 +1,12 @@
 // backend/calibration-manager.js
 const math = require('mathjs');
+const {
+  quaternionToRotationMatrix,
+  rotationMatrixToQuaternion,
+  quaternionToEuler,
+  inverseQuaternion,
+  multiplyQuaternions
+} = require('../utils/rotation-utils');
 
 class CalibrationManager {
   constructor() {
@@ -76,7 +83,7 @@ class CalibrationManager {
       const device2bone = calibration.device2boneMatrices?.[deviceKey];
       
       // Calculate world frame quaternion
-      const rotMatrix = this.quaternionToRotationMatrix(deviceData.quaternion);
+      const rotMatrix = quaternionToRotationMatrix(deviceData.quaternion);
       let worldRotMatrix = math.multiply(calibration.smpl2imu, rotMatrix);
       
       // Apply device2bone transformation if available (T-pose calibrated)
@@ -84,7 +91,7 @@ class CalibrationManager {
         worldRotMatrix = math.multiply(worldRotMatrix, device2bone);
       }
       
-      const worldQuaternion = this.rotationMatrixToQuaternion(worldRotMatrix);
+      const worldQuaternion = rotationMatrixToQuaternion(worldRotMatrix);
       
       // Calculate world frame accelerometer
       // For acceleration, we only use smpl2imu * rotMatrix (not device2bone)
@@ -116,7 +123,7 @@ class CalibrationManager {
       }
       
       // Calculate world frame Euler angles
-      const worldEuler = this.quaternionToEuler(worldQuaternion);
+      const worldEuler = quaternionToEuler(worldQuaternion);
       
       // Calculate visualization quaternion based on device type
       const worldFrameQuatForViz = this.getVisualizationQuaternion(
@@ -142,95 +149,6 @@ class CalibrationManager {
       console.error(`Error applying calibration for client ${clientId}:`, error);
       return deviceData;
     }
-  }
-
-  /**
-   * Convert quaternion to rotation matrix
-   */
-  quaternionToRotationMatrix(q) {
-    const [x, y, z, w] = q;
-    
-    const xx = x * x;
-    const xy = x * y;
-    const xz = x * z;
-    const xw = x * w;
-    
-    const yy = y * y;
-    const yz = y * z;
-    const yw = y * w;
-    
-    const zz = z * z;
-    const zw = z * w;
-    
-    return [
-      [1 - 2 * (yy + zz), 2 * (xy - zw), 2 * (xz + yw)],
-      [2 * (xy + zw), 1 - 2 * (xx + zz), 2 * (yz - xw)],
-      [2 * (xz - yw), 2 * (yz + xw), 1 - 2 * (xx + yy)]
-    ];
-  }
-
-  /**
-   * Convert rotation matrix to quaternion
-   */
-  rotationMatrixToQuaternion(m) {
-    const trace = m[0][0] + m[1][1] + m[2][2];
-    let x, y, z, w;
-    
-    if (trace > 0) {
-      const S = Math.sqrt(trace + 1.0) * 2;
-      w = 0.25 * S;
-      x = (m[2][1] - m[1][2]) / S;
-      y = (m[0][2] - m[2][0]) / S;
-      z = (m[1][0] - m[0][1]) / S;
-    } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
-      const S = Math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2;
-      w = (m[2][1] - m[1][2]) / S;
-      x = 0.25 * S;
-      y = (m[0][1] + m[1][0]) / S;
-      z = (m[0][2] + m[2][0]) / S;
-    } else if (m[1][1] > m[2][2]) {
-      const S = Math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2;
-      w = (m[0][2] - m[2][0]) / S;
-      x = (m[0][1] + m[1][0]) / S;
-      y = 0.25 * S;
-      z = (m[1][2] + m[2][1]) / S;
-    } else {
-      const S = Math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2;
-      w = (m[1][0] - m[0][1]) / S;
-      x = (m[0][2] + m[2][0]) / S;
-      y = (m[1][2] + m[2][1]) / S;
-      z = 0.25 * S;
-    }
-    
-    return [x, y, z, w];
-  }
-
-  /**
-   * Convert quaternion to Euler angles in degrees
-   */
-  quaternionToEuler(quaternion) {
-    const [x, y, z, w] = quaternion;
-    
-    // Roll (x-axis rotation)
-    const sinr_cosp = 2 * (w * x + y * z);
-    const cosr_cosp = 1 - 2 * (x * x + y * y);
-    const roll = Math.atan2(sinr_cosp, cosr_cosp) * 180 / Math.PI;
-
-    // Pitch (y-axis rotation)
-    const sinp = 2 * (w * y - z * x);
-    let pitch;
-    if (Math.abs(sinp) >= 1) {
-      pitch = Math.sign(sinp) * 90;
-    } else {
-      pitch = Math.asin(sinp) * 180 / Math.PI;
-    }
-
-    // Yaw (z-axis rotation)
-    const siny_cosp = 2 * (w * z + x * y);
-    const cosy_cosp = 1 - 2 * (y * y + z * z);
-    const yaw = Math.atan2(siny_cosp, cosy_cosp) * 180 / Math.PI;
-
-    return [roll, pitch, yaw];
   }
 
   /**
@@ -264,43 +182,15 @@ class CalibrationManager {
    */
   getVisualizationQuaternion(worldQuaternion, deviceName, referenceQuat) {
     // First, calculate the inverse of the reference quaternion
-    const refQuatInverse = this.inverseQuaternion(referenceQuat);
+    const refQuatInverse = inverseQuaternion(referenceQuat);
     
     // Multiply worldQuaternion by inverse of reference quaternion
     // This gives us the relative rotation from the calibration moment
-    const relativeQuat = this.quaternionMultiply(refQuatInverse, worldQuaternion);
+    const relativeQuat = multiplyQuaternions(refQuatInverse, worldQuaternion);
     
     // After calibration (especially T-pose), the coordinate systems are aligned
     // No need for device-specific transforms - just return the relative quaternion
     return relativeQuat;
-  }
-
-  /**
-   * Calculate inverse of a quaternion (conjugate for unit quaternions)
-   * @param {Array} q - Quaternion [x, y, z, w]
-   * @returns {Array} Inverse quaternion
-   */
-  inverseQuaternion(q) {
-    // For unit quaternions, inverse is the conjugate
-    return [-q[0], -q[1], -q[2], q[3]];
-  }
-
-  /**
-   * Multiply two quaternions: q1 * q2
-   * @param {Array} q1 - First quaternion [x, y, z, w]
-   * @param {Array} q2 - Second quaternion [x, y, z, w]
-   * @returns {Array} Result quaternion
-   */
-  quaternionMultiply(q1, q2) {
-    const [x1, y1, z1, w1] = q1;
-    const [x2, y2, z2, w2] = q2;
-    
-    return [
-      w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-      w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-      w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-      w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2
-    ];
   }
 
   /**

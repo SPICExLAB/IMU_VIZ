@@ -1,12 +1,11 @@
-// CalibrationPanel.js - With acceleration offset support
-import { useState, useRef } from 'react';
+import React, { useState, useRef } from 'react';
+import { Paper, Text, Button, Group, Progress, Stack, Box } from '@mantine/core';
 import { 
   calculateAverageQuaternion, 
   quaternionToRotationMatrix,
   transposeMatrix,
   matrixMultiply
-} from '../utils/mathUtils';
-import './CalibrationPanel.css';
+} from '../../utils/mathUtils';
 
 const CalibrationPanel = ({ 
   selectedDevice, 
@@ -14,7 +13,6 @@ const CalibrationPanel = ({
   onCalibrationComplete,
   onCalibrationReset,
   onTPoseCalibrationComplete,
-  showOverlay = false,
   calibrationParams = {}
 }) => {
   // Calibration states
@@ -324,65 +322,84 @@ const CalibrationPanel = ({
     return 'disabled';
   };
   
-  // Render progress bar
-  const renderProgressBar = () => {
-    if (calibrationStep === 'inProgress' || calibrationStep === 'tposeInProgress') {
-      return (
-        <div className="calibration-progress">
-          <div 
-            className="progress-bar" 
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      );
-    }
-    return null;
-  };
-  
   const worldFrameButtonState = getWorldFrameButtonState();
   const tposeButtonState = getTPoseButtonState();
   
   return (
-    <div className={`calibration-panel-container ${showOverlay ? 'with-overlay' : 'full-width'}`}>
-      <div className="calibration-panel">
-        <div className="calibration-content">
-          <div className="calibration-instruction">
+    <Box
+      style={{
+        position: 'fixed',
+        bottom: 24,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 1000,
+        minWidth: 400,
+        maxWidth: 600,
+      }}
+    >
+      <Paper
+        shadow="xl"
+        p="lg"
+        radius="md"
+        withBorder
+        style={{
+          backgroundColor: 'rgba(31, 41, 55, 0.95)',
+          backdropFilter: 'blur(8px)',
+          borderColor: '#374151',
+        }}
+      >
+        <Stack gap="md">
+          <Text size="sm" fw={500} c="gray.3" ta="center">
             {getInstructionText()}
-          </div>
+          </Text>
           
-          {renderProgressBar()}
+          {(calibrationStep === 'inProgress' || calibrationStep === 'tposeInProgress') && (
+            <Progress 
+              value={progress} 
+              size="sm" 
+              radius="sm"
+              color="green"
+              animated
+            />
+          )}
           
-          <div className="calibration-buttons">
-            <button 
-              className={`calibration-button ${worldFrameButtonState}`}
+          <Group justify="center" gap="md">
+            <Button
               onClick={startWorldFrameCalibration}
               disabled={worldFrameButtonState === 'disabled'}
+              color={worldFrameButtonState === 'done' ? 'blue' : 'green'}
+              variant={worldFrameButtonState === 'done' ? 'light' : 'filled'}
+              size="sm"
             >
               {worldFrameButtonState === 'done' ? "World Frame ✓" : "Align World Frame"}
-            </button>
+            </Button>
             
-            <button 
-              className={`calibration-button ${tposeButtonState}`}
+            <Button
               onClick={startTPoseCalibration}
               disabled={tposeButtonState === 'disabled'}
+              color={tposeButtonState === 'done' ? 'blue' : 'green'}
+              variant={tposeButtonState === 'done' ? 'light' : 'filled'}
+              size="sm"
             >
               {tposeButtonState === 'done' ? "T-Pose ✓" : "T-Pose Calibration"}
-            </button>
+            </Button>
             
-            <button 
-              className="calibration-button reset"
+            <Button
               onClick={resetCalibration}
               disabled={calibrationStep === 'worldFrame' || 
                        calibrationStep === 'inProgress' || 
                        calibrationStep === 'tposeCountdown' ||
                        calibrationStep === 'tposeInProgress'}
+              color="gray"
+              variant="subtle"
+              size="sm"
             >
               Reset
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+            </Button>
+          </Group>
+        </Stack>
+      </Paper>
+    </Box>
   );
 };
 

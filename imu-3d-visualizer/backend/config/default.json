@@ -1,0 +1,22 @@
+{
+  "server": {
+    "websocketPort": 3001,
+    "udpReceiverPort": 8001,
+    "udpSenderPort": 9001,
+    "targetFPS": 30,
+    "host": "0.0.0.0",
+    "udpSenderHost": "127.0.0.1"
+  },
+  "calibration": {
+    "cleanupInterval": 3600000,
+    "maxAge": 3600000
+  },
+  "stats": {
+    "logInterval": 30000,
+    "packetLogThreshold": 100
+  },
+  "processing": {
+    "bufferTimeMs": 100,
+    "interpolationEnabled": true
+  }
+}
